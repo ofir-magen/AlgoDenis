@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+passlib[bcrypt]
+python-jose[cryptography]
+SQLAlchemy
+python-dotenv
+openai
+requests
+python-telegram-bot==21.11.1
+email-validator
+
+
+
