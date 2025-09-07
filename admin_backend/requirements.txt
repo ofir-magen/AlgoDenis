@@ -4,4 +4,4 @@ sqlalchemy==2.0.43
 pydantic==2.11.7
 pydantic[email]==2.11.7
 python-dotenv==1.0.1
-PyJWT==2.9.0
+python-jose[cryptography]==3.3.0

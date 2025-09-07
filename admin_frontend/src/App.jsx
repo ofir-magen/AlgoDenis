@@ -7,46 +7,55 @@ function apiFetch(path, { auth, ...init } = {}) {
     ...init,
     headers: {
       ...(init.headers || {}),
-      ...(auth ? { Authorization: `Basic ${auth}` } : {}),
+      ...(auth ? { Authorization: `Bearer ${auth}` } : {}),
       ...(init.body ? { 'Content-Type': 'application/json' } : {})
     }
   })
 }
 
 export default function App() {
-  const [auth, setAuth] = useState(() => localStorage.getItem('admin_auth') || '')
+  const [auth, setAuth] = useState(() => localStorage.getItem('admin_token') || '')
   const [u, setU] = useState('')
   const [p, setP] = useState('')
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(false)
+
   const [rows, setRows] = useState([])
-  const [q, setQ] = useState('')
-  const [sorts, setSorts] = useState([]) // [{key:'first_name', dir:'asc'}]
+  const [filter, setFilter] = useState('')
 
-  useEffect(() => {
-    if (!auth) return
-    load()
-  }, [auth])
+  // מיון מרובה שדות: מערך של {key, dir} כאשר dir הוא 'asc' | 'desc'
+  const [sorters, setSorters] = useState([])
 
+  // עריכה בתוך הטבלה
+  const [editRowId, setEditRowId] = useState(null)
+  const [editDraft, setEditDraft] = useState({})
+
+  // התחברות – שולח username/password ל-/api/login ומקבל token
   async function login(e) {
     e.preventDefault()
     setErr('')
-    const token = btoa(`${u}:${p}`)
     try {
-      const res = await apiFetch('/health', { auth: token })
-      if (res.ok) {
-        localStorage.setItem('admin_auth', token)
-        setAuth(token)
-      } else {
-        setErr('שם משתמש או סיסמה שגויים')
+      const res = await fetch(`${API}/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: u, password: p })
+      })
+      if (!res.ok) {
+        const txt = await res.text()
+        throw new Error(txt || 'שם משתמש או סיסמה שגויים')
       }
+      const data = await res.json()
+      const token = data.token
+      if (!token) throw new Error('שרת לא החזיר token')
+      localStorage.setItem('admin_token', token)
+      setAuth(token)
     } catch (e) {
-      setErr(String(e))
+      setErr(String(e.message || e))
     }
   }
 
   function logout() {
-    localStorage.removeItem('admin_auth')
+    localStorage.removeItem('admin_token')
     setAuth('')
     setRows([])
   }
@@ -57,200 +66,224 @@ export default function App() {
       const res = await apiFetch('/users', { auth })
       if (!res.ok) throw new Error(await res.text())
       const data = await res.json()
-      setRows(data || [])
+      setRows(Array.isArray(data) ? data : [])
     } catch (e) {
-      setErr(String(e))
+      setErr(String(e.message || e))
     } finally {
       setLoading(false)
     }
   }
 
-  async function updateRow(r) {
-    try {
-      const res = await apiFetch(`/users/${r.id}`, { auth, method: 'PUT', body: JSON.stringify(r) })
-      if (!res.ok) throw new Error(await res.text())
-    } catch (e) {
-      alert('נכשל בעדכון: ' + e.message)
-    }
-  }
-
-  async function deleteRow(id) {
-    if (!confirm('למחוק משתמש?')) return
-    try {
-      const res = await apiFetch(`/users/${id}`, { auth, method: 'DELETE' })
-      if (!res.ok) throw new Error(await res.text())
-      setRows(rows.filter(x => x.id !== id))
-    } catch (e) {
-      alert('נכשל במחיקה: ' + e.message)
-    }
-  }
-
-  // --- חיפוש ---
+  // חיפוש/סינון
   const filtered = useMemo(() => {
-    const t = q.trim().toLowerCase()
-    if (!t) return rows
+    const q = (filter || '').toLowerCase().trim()
+    if (!q) return rows
     return rows.filter(r =>
-      Object.values(r).some(v => String(v ?? '').toLowerCase().includes(t))
+      Object.values(r ?? {}).some(v => String(v ?? '').toLowerCase().includes(q))
     )
-  }, [rows, q])
+  }, [rows, filter])
 
-  // --- מיון: לחץ רגיל = מיון יחיד; Shift-Click = הוספה/החלפה בשרשרת ---
-  function toggleSort(key, multi) {
-    setSorts(prev => {
-      const idx = prev.findIndex(s => s.key === key)
-      if (!multi) {
-        // מיון יחיד
-        if (idx === -1) return [{ key, dir: 'asc' }]
-        const dir = prev[idx].dir === 'asc' ? 'desc' : 'asc'
-        return [{ key, dir }]
-      } else {
-        // Multi-sort
-        const next = [...prev]
-        if (idx === -1) next.push({ key, dir: 'asc' })
-        else {
-          next[idx] = { key, dir: next[idx].dir === 'asc' ? 'desc' : 'asc' }
-        }
-        return next
-      }
-    })
-  }
-
+  // מיון מרובה
   const sorted = useMemo(() => {
-    if (!sorts.length) return filtered
-    const copy = [...filtered]
-    copy.sort((a, b) => {
-      for (const { key, dir } of sorts) {
-        const av = norm(a[key]), bv = norm(b[key])
-        if (av < bv) return dir === 'asc' ? -1 : 1
-        if (av > bv) return dir === 'asc' ? 1 : -1
+    if (!sorters.length) return filtered
+    const arr = [...filtered]
+    arr.sort((a, b) => {
+      for (const s of sorters) {
+        const av = a?.[s.key]
+        const bv = b?.[s.key]
+        const cmp = String(av ?? '').localeCompare(String(bv ?? ''), 'he', { numeric: true, sensitivity: 'base' })
+        if (cmp !== 0) return s.dir === 'desc' ? -cmp : cmp
       }
       return 0
     })
-    return copy
-  }, [filtered, sorts])
+    return arr
+  }, [filtered, sorters])
 
-  function norm(v) {
-    if (v == null) return ''
-    // תאריך למיון טבעי
-    if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) return v
-    return String(v).toLowerCase()
+  function toggleSort(key) {
+    setSorters(prev => {
+      const idx = prev.findIndex(s => s.key === key)
+      if (idx === -1) return [...prev, { key, dir: 'asc' }]
+      const cur = prev[idx]
+      if (cur.dir === 'asc') {
+        const next = [...prev]; next[idx] = { key, dir: 'desc' }; return next
+      }
+      // היה desc – הסרה (כיבוי מיון על השדה)
+      const next = [...prev]; next.splice(idx, 1); return next
+    })
   }
 
+  function sorterIndicator(key) {
+    const i = sorters.findIndex(s => s.key === key)
+    if (i === -1) return ''
+    return sorters[i].dir === 'asc' ? ' ↑' : ' ↓'
+  }
+
+  function beginEdit(r) {
+    setEditRowId(r.id)
+    setEditDraft(r)
+  }
+  function cancelEdit() {
+    setEditRowId(null)
+    setEditDraft({})
+  }
+  function changeDraft(key, val) {
+    setEditDraft(d => ({ ...d, [key]: val }))
+  }
+
+  async function saveEdit() {
+    if (editRowId == null) return
+    setErr('')
+    try {
+      const res = await apiFetch(`/users/${editRowId}`, {
+        method: 'PUT',
+        auth,
+        body: JSON.stringify({ data: editDraft })
+      })
+      if (!res.ok) throw new Error(await res.text())
+      await load()
+      cancelEdit()
+    } catch (e) {
+      setErr(String(e.message || e))
+    }
+  }
+
+  async function delRow(id) {
+    if (!confirm('למחוק משתמש זה?')) return
+    setErr('')
+    try {
+      const res = await apiFetch(`/users/${id}`, { method: 'DELETE', auth })
+      if (!res.ok) throw new Error(await res.text())
+      await load()
+    } catch (e) {
+      setErr(String(e.message || e))
+    }
+  }
+
+  useEffect(() => {
+    if (auth) load()
+  }, [auth])
+
+  // -------- UI --------
   if (!auth) {
     return (
-      <div className="container" style={{maxWidth: 420, paddingTop: 80}}>
-        <div className="card" style={{padding: 24}}>
-          <h2 style={{marginTop: 0, marginBottom: 8}}>כניסה למערכת ניהול</h2>
-          <p style={{marginTop: 0, color: 'var(--muted)'}}>הזן שם משתמש וסיסמה</p>
-          <form onSubmit={login} className="vstack" style={{marginTop: 12}}>
-            <input className="input" placeholder="שם משתמש" value={u} onChange={e=>setU(e.target.value)} />
-            <input className="input" type="password" placeholder="סיסמה" value={p} onChange={e=>setP(e.target.value)} />
-            <button className="btn btn-primary" type="submit">כניסה</button>
-          </form>
-          {err && <p style={{color:'#ff99a3', marginTop:12}}>{err}</p>}
-        </div>
+      <div className="page-wrap">
+        <form className="login-card" onSubmit={login}>
+          <h1>התחברות מנהל</h1>
+          <input
+            placeholder="שם משתמש"
+            value={u}
+            onChange={e => setU(e.target.value)}
+            dir="ltr"
+            autoFocus
+          />
+          <input
+            placeholder="סיסמה"
+            type="password"
+            value={p}
+            onChange={e => setP(e.target.value)}
+            dir="ltr"
+          />
+          {err ? <div className="err">{err}</div> : null}
+          <button type="submit">כניסה</button>
+        </form>
       </div>
     )
   }
 
   return (
-    <div className="container" style={{paddingTop: 22}}>
-      <div className="card">
-        <div className="header">
-          <div className="hstack">
-            <strong style={{fontSize: 18}}>טבלת משתמשים</strong>
-            <span className="badge">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="#4da3ff"><path d="M19 4h-14c-1.1 0-2 .9-2 2v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-12a2 2 0 0 0-2-2zm0 14h-14v-9h14v9zm-9-8h-3v3h3v-3z"/></svg>
-              {rows.length} משתמשים
-            </span>
-          </div>
-          <div className="hstack">
-            <input className="input" placeholder="חיפוש בכל השדות…" value={q} onChange={e=>setQ(e.target.value)} />
-            <button className="btn" onClick={load} disabled={loading}>{loading ? 'טוען…' : 'רענן'}</button>
-            <button className="btn btn-ghost" onClick={logout}>התנתק</button>
-          </div>
+    <div className="page-wrap">
+      <header className="topbar">
+        <div className="left">
+          <button onClick={load} disabled={loading}>רענן</button>
+          <input
+            className="search"
+            placeholder="חיפוש בכל השדות…"
+            value={filter}
+            onChange={e => setFilter(e.target.value)}
+          />
         </div>
+        <div className="right">
+          <span className="pill">מספר משתמשים: {rows.length}</span>
+          <button onClick={logout}>התנתק</button>
+        </div>
+      </header>
 
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                {header('id','ID')}
-                {header('email','מייל')}
-                {header('first_name','שם פרטי')}
-                {header('last_name','שם משפחה')}
-                {header('phone','טלפון')}
-                {header('telegram_username','טלגרם')}
-                {header('active_until','תוקף')}
-                {header('approved','מאושר')}
-                <th>פעולות</th>
+      {err ? <div className="err" style={{ marginTop: 12 }}>{err}</div> : null}
+
+      <div className="table-wrap">
+        <table className="users">
+          <thead>
+            <tr>
+              <th onClick={() => toggleSort('id')}>ID{sorterIndicator('id')}</th>
+              <th onClick={() => toggleSort('first_name')}>שם פרטי{sorterIndicator('first_name')}</th>
+              <th onClick={() => toggleSort('last_name')}>שם משפחה{sorterIndicator('last_name')}</th>
+              <th onClick={() => toggleSort('email')}>מייל{sorterIndicator('email')}</th>
+              <th onClick={() => toggleSort('telegram_username')}>טלגרם{sorterIndicator('telegram_username')}</th>
+              <th onClick={() => toggleSort('phone')}>טלפון{sorterIndicator('phone')}</th>
+              <th onClick={() => toggleSort('approved')}>מאושר{sorterIndicator('approved')}</th>
+              <th onClick={() => toggleSort('created_at')}>נוצר{sorterIndicator('created_at')}</th>
+              <th>פעולות</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.length === 0 ? (
+              <tr><td colSpan="9" style={{ textAlign: 'center', opacity: .7 }}>אין נתונים</td></tr>
+            ) : sorted.map(r => (
+              <tr key={r.id}>
+                <td>{r.id}</td>
+                <td>
+                  {editRowId === r.id
+                    ? <input value={editDraft.first_name ?? ''} onChange={e => changeDraft('first_name', e.target.value)} />
+                    : r.first_name}
+                </td>
+                <td>
+                  {editRowId === r.id
+                    ? <input value={editDraft.last_name ?? ''} onChange={e => changeDraft('last_name', e.target.value)} />
+                    : r.last_name}
+                </td>
+                <td>
+                  {editRowId === r.id
+                    ? <input value={editDraft.email ?? ''} onChange={e => changeDraft('email', e.target.value)} />
+                    : r.email}
+                </td>
+                <td>
+                  {editRowId === r.id
+                    ? <input value={editDraft.telegram_username ?? ''} onChange={e => changeDraft('telegram_username', e.target.value)} />
+                    : r.telegram_username}
+                </td>
+                <td>
+                  {editRowId === r.id
+                    ? <input value={editDraft.phone ?? ''} onChange={e => changeDraft('phone', e.target.value)} />
+                    : r.phone}
+                </td>
+                <td>
+                  {editRowId === r.id
+                    ? (
+                      <select value={editDraft.approved ? '1' : '0'} onChange={e => changeDraft('approved', e.target.value === '1')}>
+                        <option value="0">לא</option>
+                        <option value="1">כן</option>
+                      </select>
+                    ) : (r.approved ? 'כן' : 'לא')}
+                </td>
+                <td>{r.created_at}</td>
+                <td className="actions">
+                  {editRowId === r.id ? (
+                    <>
+                      <button onClick={saveEdit}>שמור</button>
+                      <button onClick={cancelEdit} className="secondary">בטל</button>
+                    </>
+                  ) : (
+                    <>
+                      <button onClick={() => beginEdit(r)}>ערוך</button>
+                      <button onClick={() => delRow(r.id)} className="danger">מחק</button>
+                    </>
+                  )}
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {sorted.map(r => (
-                <tr key={r.id}>
-                  <td>{r.id}</td>
-                  <Cell value={r.email} onChange={v=>set(r,'email',v)} />
-                  <Cell value={r.first_name} onChange={v=>set(r,'first_name',v)} />
-                  <Cell value={r.last_name} onChange={v=>set(r,'last_name',v)} />
-                  <Cell value={r.phone} onChange={v=>set(r,'phone',v)} />
-                  <Cell value={r.telegram_username} onChange={v=>set(r,'telegram_username',v)} />
-                  <td>
-                    <input
-                      className="cell-input"
-                      type="date"
-                      value={(r.active_until ?? '').slice(0,10)}
-                      onChange={e=>set(r,'active_until',e.target.value)}
-                    />
-                  </td>
-                  <td style={{textAlign:'center'}}>
-                    <input className="checkbox" type="checkbox" checked={!!r.approved} onChange={e=>set(r,'approved',e.target.checked)} />
-                  </td>
-                  <td style={{whiteSpace:'nowrap'}}>
-                    <button className="btn" onClick={()=>updateRow(r)}>עדכן</button>{' '}
-                    <button className="btn btn-danger" onClick={()=>deleteRow(r.id)}>מחק</button>
-                  </td>
-                </tr>
-              ))}
-              {sorted.length === 0 && (
-                <tr><td colSpan="9" style={{padding: 18, color:'var(--muted)', textAlign:'center'}}>אין נתונים</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <div style={{padding: '10px 16px', color:'var(--muted)', fontSize: 12}}>
-          טיפ: למיון לפי כמה עמודות יחד – החזק <span className="kbd">Shift</span> ולחץ על כותרת העמודה.
-        </div>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
-  )
-
-  function set(obj, k, v) {
-    obj[k] = v
-    setRows([...rows])
-  }
-
-  function header(key, label) {
-    const active = sorts.findIndex(s => s.key === key)
-    const dir = active >= 0 ? sorts[active].dir : null
-    return (
-      <th
-        onClick={(e)=>toggleSort(key, e.shiftKey)}
-        style={{cursor:'pointer', userSelect:'none'}}
-        title={active>=0 ? `מיקום מיון: ${active+1} (${dir==='asc'?'עולה':'יורד'})` : 'לחץ למיון, Shift ללמיון מרובה'}
-      >
-        {label}
-        {active>=0 && <span className="sort">{dir==='asc'?'▲':'▼'}{sorts.length>1?` ${active+1}`:''}</span>}
-      </th>
-    )
-  }
-}
-
-function Cell({ value, onChange }) {
-  return (
-    <td>
-      <input className="cell-input" value={value ?? ''} onChange={e=>onChange(e.target.value)} />
-    </td>
   )
 }
