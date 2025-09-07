@@ -72,3 +72,5 @@ uvicorn main:app --reload --port 8000
 front:
 npm i
 npm run dev
+
+uvicorn app:app --host $(grep ^HOST .env | cut -d= -f2) --port $(grep ^PORT .env | cut -d= -f2)
