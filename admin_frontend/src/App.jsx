@@ -23,17 +23,17 @@ export default function App() {
   const [rows, setRows] = useState([])
   const [filter, setFilter] = useState('')
 
-  // מיון מרובה שדות: מערך של {key, dir} כאשר dir הוא 'asc' | 'desc'
+  // מיון מרובה שדות
   const [sorters, setSorters] = useState([])
 
-  // עריכה בתוך הטבלה
+  // עריכה
   const [editRowId, setEditRowId] = useState(null)
   const [editDraft, setEditDraft] = useState({})
 
-  // התחברות – שולח username/password ל-/api/login ומקבל token
   async function login(e) {
     e.preventDefault()
     setErr('')
+    setLoading(true)
     try {
       const res = await fetch(`${API}/login`, {
         method: 'POST',
@@ -49,8 +49,12 @@ export default function App() {
       if (!token) throw new Error('שרת לא החזיר token')
       localStorage.setItem('admin_token', token)
       setAuth(token)
+      setU('')
+      setP('')
     } catch (e) {
       setErr(String(e.message || e))
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -61,7 +65,7 @@ export default function App() {
   }
 
   async function load() {
-    setLoading(true); setErr('')
+    setErr('')
     try {
       const res = await apiFetch('/users', { auth })
       if (!res.ok) throw new Error(await res.text())
@@ -69,12 +73,10 @@ export default function App() {
       setRows(Array.isArray(data) ? data : [])
     } catch (e) {
       setErr(String(e.message || e))
-    } finally {
-      setLoading(false)
     }
   }
 
-  // חיפוש/סינון
+  // סינון
   const filtered = useMemo(() => {
     const q = (filter || '').toLowerCase().trim()
     if (!q) return rows
@@ -107,7 +109,6 @@ export default function App() {
       if (cur.dir === 'asc') {
         const next = [...prev]; next[idx] = { key, dir: 'desc' }; return next
       }
-      // היה desc – הסרה (כיבוי מיון על השדה)
       const next = [...prev]; next.splice(idx, 1); return next
     })
   }
@@ -159,42 +160,57 @@ export default function App() {
     }
   }
 
-  useEffect(() => {
-    if (auth) load()
-  }, [auth])
+  useEffect(() => { if (auth) load() }, [auth])
 
-  // -------- UI --------
+  // ====== UI ======
   if (!auth) {
     return (
-      <div className="page-wrap">
-        <form className="login-card" onSubmit={login}>
-          <h1>התחברות מנהל</h1>
+      <div className="auth-screen">
+        <div className="bg-blobs" aria-hidden />
+        <form className="auth-card" onSubmit={login}>
+          <div className="brand">
+            <div className="logo-dot" />
+            <h1>Admin Console</h1>
+            <p>ניהול משתמשים ומנויים</p>
+          </div>
+
+          <label>שם משתמש</label>
           <input
-            placeholder="שם משתמש"
+            className="input"
+            placeholder="admin"
             value={u}
             onChange={e => setU(e.target.value)}
             dir="ltr"
             autoFocus
           />
+
+          <label>סיסמה</label>
           <input
-            placeholder="סיסמה"
+            className="input"
+            placeholder="••••••••"
             type="password"
             value={p}
             onChange={e => setP(e.target.value)}
             dir="ltr"
           />
-          {err ? <div className="err">{err}</div> : null}
-          <button type="submit">כניסה</button>
+
+          {err ? <div className="alert">{err}</div> : null}
+
+          <button className="btn-primary" type="submit" disabled={loading}>
+            {loading ? 'מתחבר…' : 'כניסה'}
+          </button>
+
+          <div className="footnote">© {new Date().getFullYear()} Algo Admin</div>
         </form>
       </div>
     )
   }
 
   return (
-    <div className="page-wrap">
+    <div className="admin-shell">
       <header className="topbar">
         <div className="left">
-          <button onClick={load} disabled={loading}>רענן</button>
+          <button className="btn-secondary" onClick={load}>רענן</button>
           <input
             className="search"
             placeholder="חיפוש בכל השדות…"
@@ -203,12 +219,12 @@ export default function App() {
           />
         </div>
         <div className="right">
-          <span className="pill">מספר משתמשים: {rows.length}</span>
-          <button onClick={logout}>התנתק</button>
+          <span className="pill">סה״כ: {rows.length}</span>
+          <button className="btn-outline" onClick={logout}>התנתק</button>
         </div>
       </header>
 
-      {err ? <div className="err" style={{ marginTop: 12 }}>{err}</div> : null}
+      {err ? <div className="alert" style={{ margin: '12px auto' }}>{err}</div> : null}
 
       <div className="table-wrap">
         <table className="users">
@@ -227,39 +243,39 @@ export default function App() {
           </thead>
           <tbody>
             {sorted.length === 0 ? (
-              <tr><td colSpan="9" style={{ textAlign: 'center', opacity: .7 }}>אין נתונים</td></tr>
+              <tr><td colSpan="9" className="muted">אין נתונים</td></tr>
             ) : sorted.map(r => (
               <tr key={r.id}>
                 <td>{r.id}</td>
                 <td>
                   {editRowId === r.id
-                    ? <input value={editDraft.first_name ?? ''} onChange={e => changeDraft('first_name', e.target.value)} />
+                    ? <input className="cell-input" value={editDraft.first_name ?? ''} onChange={e => changeDraft('first_name', e.target.value)} />
                     : r.first_name}
                 </td>
                 <td>
                   {editRowId === r.id
-                    ? <input value={editDraft.last_name ?? ''} onChange={e => changeDraft('last_name', e.target.value)} />
+                    ? <input className="cell-input" value={editDraft.last_name ?? ''} onChange={e => changeDraft('last_name', e.target.value)} />
                     : r.last_name}
                 </td>
                 <td>
                   {editRowId === r.id
-                    ? <input value={editDraft.email ?? ''} onChange={e => changeDraft('email', e.target.value)} />
+                    ? <input className="cell-input" value={editDraft.email ?? ''} onChange={e => changeDraft('email', e.target.value)} />
                     : r.email}
                 </td>
                 <td>
                   {editRowId === r.id
-                    ? <input value={editDraft.telegram_username ?? ''} onChange={e => changeDraft('telegram_username', e.target.value)} />
+                    ? <input className="cell-input" value={editDraft.telegram_username ?? ''} onChange={e => changeDraft('telegram_username', e.target.value)} />
                     : r.telegram_username}
                 </td>
                 <td>
                   {editRowId === r.id
-                    ? <input value={editDraft.phone ?? ''} onChange={e => changeDraft('phone', e.target.value)} />
+                    ? <input className="cell-input" value={editDraft.phone ?? ''} onChange={e => changeDraft('phone', e.target.value)} />
                     : r.phone}
                 </td>
                 <td>
                   {editRowId === r.id
                     ? (
-                      <select value={editDraft.approved ? '1' : '0'} onChange={e => changeDraft('approved', e.target.value === '1')}>
+                      <select className="cell-input" value={editDraft.approved ? '1' : '0'} onChange={e => changeDraft('approved', e.target.value === '1')}>
                         <option value="0">לא</option>
                         <option value="1">כן</option>
                       </select>
@@ -269,13 +285,13 @@ export default function App() {
                 <td className="actions">
                   {editRowId === r.id ? (
                     <>
-                      <button onClick={saveEdit}>שמור</button>
-                      <button onClick={cancelEdit} className="secondary">בטל</button>
+                      <button className="btn-primary sm" onClick={saveEdit}>שמור</button>
+                      <button className="btn-secondary sm" onClick={cancelEdit}>בטל</button>
                     </>
                   ) : (
                     <>
-                      <button onClick={() => beginEdit(r)}>ערוך</button>
-                      <button onClick={() => delRow(r.id)} className="danger">מחק</button>
+                      <button className="btn-primary sm" onClick={() => beginEdit(r)}>ערוך</button>
+                      <button className="btn-danger sm" onClick={() => delRow(r.id)}>מחק</button>
                     </>
                   )}
                 </td>
