@@ -13,6 +13,58 @@ function apiFetch(path, { auth, ...init } = {}) {
   })
 }
 
+// מיפוי שמות עמודות לתצוגה
+const LABELS = {
+  id: 'ID',
+  first_name: 'שם פרטי',
+  last_name: 'שם משפחה',
+  email: 'מייל',
+  telegram_username: 'טלגרם',
+  phone: 'טלפון',
+  approved: 'מאושר',
+  active_until: 'תוקף',
+  created_at: 'נוצר',
+}
+
+// עמודות בסיס שיופיעו תמיד (אם קיימות בנתונים)
+const BASE_COLUMNS = [
+  'id',
+  'first_name',
+  'last_name',
+  'email',
+  'telegram_username',
+  'phone',
+  'approved',
+  'active_until',
+  'created_at',
+]
+
+// שדות שלא מציגים
+const EXCLUDE = new Set(['password', 'password_hash', 'token'])
+
+function formatDateTime(s) {
+  if (!s) return ''
+  // ננסה לפרש גם "YYYY-MM-DD HH:MM:SS" וגם ISO
+  const isoLike = String(s).replace(' ', 'T')
+  const d = new Date(isoLike)
+  if (isNaN(d.getTime())) return String(s)
+  return d.toLocaleString('he-IL', { hour12: false })
+}
+
+function toDatetimeLocalValue(s) {
+  if (!s) return ''
+  const isoLike = String(s).replace(' ', 'T')
+  const d = new Date(isoLike)
+  if (isNaN(d.getTime())) return ''
+  const pad = (n) => String(n).padStart(2, '0')
+  const yyyy = d.getFullYear()
+  const mm = pad(d.getMonth() + 1)
+  const dd = pad(d.getDate())
+  const hh = pad(d.getHours())
+  const mi = pad(d.getMinutes())
+  return `${yyyy}-${mm}-${dd}T${hh}:${mi}`
+}
+
 export default function App() {
   const [auth, setAuth] = useState(() => localStorage.getItem('admin_token') || '')
   const [u, setU] = useState('')
@@ -23,10 +75,8 @@ export default function App() {
   const [rows, setRows] = useState([])
   const [filter, setFilter] = useState('')
 
-  // מיון מרובה שדות
-  const [sorters, setSorters] = useState([])
+  const [sorters, setSorters] = useState([]) // [{key, dir:'asc'|'desc'}]
 
-  // עריכה
   const [editRowId, setEditRowId] = useState(null)
   const [editDraft, setEditDraft] = useState({})
 
@@ -40,10 +90,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: u, password: p })
       })
-      if (!res.ok) {
-        const txt = await res.text()
-        throw new Error(txt || 'שם משתמש או סיסמה שגויים')
-      }
+      if (!res.ok) throw new Error(await res.text())
       const data = await res.json()
       const token = data.token
       if (!token) throw new Error('שרת לא החזיר token')
@@ -76,16 +123,28 @@ export default function App() {
     }
   }
 
-  // סינון
+  // הפקת רשימת עמודות דינמית: קודם בסיס, ואז כל מפתח נוסף שמופיע בנתונים
+  const columns = useMemo(() => {
+    const set = new Set(BASE_COLUMNS)
+    for (const r of rows) {
+      for (const k of Object.keys(r || {})) {
+        if (!EXCLUDE.has(k) && !set.has(k)) set.add(k)
+      }
+    }
+    return Array.from(set)
+  }, [rows])
+
   const filtered = useMemo(() => {
     const q = (filter || '').toLowerCase().trim()
     if (!q) return rows
     return rows.filter(r =>
-      Object.values(r ?? {}).some(v => String(v ?? '').toLowerCase().includes(q))
+      Object.entries(r ?? {}).some(([k, v]) => {
+        if (EXCLUDE.has(k)) return false
+        return String(v ?? '').toLowerCase().includes(q)
+      })
     )
   }, [rows, filter])
 
-  // מיון מרובה
   const sorted = useMemo(() => {
     if (!sorters.length) return filtered
     const arr = [...filtered]
@@ -93,7 +152,18 @@ export default function App() {
       for (const s of sorters) {
         const av = a?.[s.key]
         const bv = b?.[s.key]
-        const cmp = String(av ?? '').localeCompare(String(bv ?? ''), 'he', { numeric: true, sensitivity: 'base' })
+        let cmp
+        // מיון חכם לתאריכים ומספרים
+        if (s.key === 'active_until' || s.key === 'created_at') {
+          const ad = new Date(String(av || '').replace(' ', 'T')).getTime() || 0
+          const bd = new Date(String(bv || '').replace(' ', 'T')).getTime() || 0
+          cmp = ad === bd ? 0 : ad < bd ? -1 : 1
+        } else if (!isNaN(Number(av)) && !isNaN(Number(bv))) {
+          const an = Number(av), bn = Number(bv)
+          cmp = an === bn ? 0 : an < bn ? -1 : 1
+        } else {
+          cmp = String(av ?? '').localeCompare(String(bv ?? ''), 'he', { numeric: true, sensitivity: 'base' })
+        }
         if (cmp !== 0) return s.dir === 'desc' ? -cmp : cmp
       }
       return 0
@@ -230,58 +300,70 @@ export default function App() {
         <table className="users">
           <thead>
             <tr>
-              <th onClick={() => toggleSort('id')}>ID{sorterIndicator('id')}</th>
-              <th onClick={() => toggleSort('first_name')}>שם פרטי{sorterIndicator('first_name')}</th>
-              <th onClick={() => toggleSort('last_name')}>שם משפחה{sorterIndicator('last_name')}</th>
-              <th onClick={() => toggleSort('email')}>מייל{sorterIndicator('email')}</th>
-              <th onClick={() => toggleSort('telegram_username')}>טלגרם{sorterIndicator('telegram_username')}</th>
-              <th onClick={() => toggleSort('phone')}>טלפון{sorterIndicator('phone')}</th>
-              <th onClick={() => toggleSort('approved')}>מאושר{sorterIndicator('approved')}</th>
-              <th onClick={() => toggleSort('created_at')}>נוצר{sorterIndicator('created_at')}</th>
+              {columns.map(key => (
+                <th key={key} onClick={() => toggleSort(key)}>
+                  {LABELS[key] || key}{sorterIndicator(key)}
+                </th>
+              ))}
               <th>פעולות</th>
             </tr>
           </thead>
           <tbody>
             {sorted.length === 0 ? (
-              <tr><td colSpan="9" className="muted">אין נתונים</td></tr>
+              <tr><td colSpan={columns.length + 1} className="muted">אין נתונים</td></tr>
             ) : sorted.map(r => (
               <tr key={r.id}>
-                <td>{r.id}</td>
-                <td>
-                  {editRowId === r.id
-                    ? <input className="cell-input" value={editDraft.first_name ?? ''} onChange={e => changeDraft('first_name', e.target.value)} />
-                    : r.first_name}
-                </td>
-                <td>
-                  {editRowId === r.id
-                    ? <input className="cell-input" value={editDraft.last_name ?? ''} onChange={e => changeDraft('last_name', e.target.value)} />
-                    : r.last_name}
-                </td>
-                <td>
-                  {editRowId === r.id
-                    ? <input className="cell-input" value={editDraft.email ?? ''} onChange={e => changeDraft('email', e.target.value)} />
-                    : r.email}
-                </td>
-                <td>
-                  {editRowId === r.id
-                    ? <input className="cell-input" value={editDraft.telegram_username ?? ''} onChange={e => changeDraft('telegram_username', e.target.value)} />
-                    : r.telegram_username}
-                </td>
-                <td>
-                  {editRowId === r.id
-                    ? <input className="cell-input" value={editDraft.phone ?? ''} onChange={e => changeDraft('phone', e.target.value)} />
-                    : r.phone}
-                </td>
-                <td>
-                  {editRowId === r.id
-                    ? (
-                      <select className="cell-input" value={editDraft.approved ? '1' : '0'} onChange={e => changeDraft('approved', e.target.value === '1')}>
-                        <option value="0">לא</option>
-                        <option value="1">כן</option>
-                      </select>
-                    ) : (r.approved ? 'כן' : 'לא')}
-                </td>
-                <td>{r.created_at}</td>
+                {columns.map(key => {
+                  const isEditing = editRowId === r.id
+                  const val = isEditing ? editDraft?.[key] : r?.[key]
+
+                  // UI מיוחד לשדות ידועים
+                  if (key === 'approved') {
+                    return (
+                      <td key={key}>
+                        {isEditing ? (
+                          <select
+                            className="cell-input"
+                            value={val ? '1' : '0'}
+                            onChange={e => changeDraft('approved', e.target.value === '1')}
+                          >
+                            <option value="0">לא</option>
+                            <option value="1">כן</option>
+                          </select>
+                        ) : (r.approved ? 'כן' : 'לא')}
+                      </td>
+                    )
+                  }
+
+                  if (key === 'active_until') {
+                    return (
+                      <td key={key}>
+                        {isEditing ? (
+                          <input
+                            type="datetime-local"
+                            className="cell-input"
+                            value={toDatetimeLocalValue(val)}
+                            onChange={e => changeDraft('active_until', e.target.value)}
+                          />
+                        ) : formatDateTime(r.active_until)}
+                      </td>
+                    )
+                  }
+
+                  // ברירת מחדל – עריכה טקסטואלית פשוטה
+                  return (
+                    <td key={key}>
+                      {isEditing ? (
+                        <input
+                          className="cell-input"
+                          value={val ?? ''}
+                          onChange={e => changeDraft(key, e.target.value)}
+                        />
+                      ) : String(val ?? '')}
+                    </td>
+                  )
+                })}
+
                 <td className="actions">
                   {editRowId === r.id ? (
                     <>
