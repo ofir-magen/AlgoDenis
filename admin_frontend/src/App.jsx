@@ -13,7 +13,7 @@ function apiFetch(path, { auth, ...init } = {}) {
   })
 }
 
-// מיפוי שמות עמודות לתצוגה
+// כותרות ידידותיות לעמודות
 const LABELS = {
   id: 'ID',
   first_name: 'שם פרטי',
@@ -26,7 +26,7 @@ const LABELS = {
   created_at: 'נוצר',
 }
 
-// עמודות בסיס שיופיעו תמיד (אם קיימות בנתונים)
+// עמודות בסיס שיופיעו (אם קיימות במידע)
 const BASE_COLUMNS = [
   'id',
   'first_name',
@@ -39,12 +39,15 @@ const BASE_COLUMNS = [
   'created_at',
 ]
 
-// שדות שלא מציגים
+// שדות שלא מציגים בטבלה
 const EXCLUDE = new Set(['password', 'password_hash', 'token'])
+
+// שדות שלא מעדכנים לעולם
+const IMMUTABLE = new Set(['id', 'created_at', 'password_hash', 'timestamp'])
 
 function formatDateTime(s) {
   if (!s) return ''
-  // ננסה לפרש גם "YYYY-MM-DD HH:MM:SS" וגם ISO
+  // תומך גם ב-"YYYY-MM-DD HH:MM:SS" וגם ב-ISO
   const isoLike = String(s).replace(' ', 'T')
   const d = new Date(isoLike)
   if (isNaN(d.getTime())) return String(s)
@@ -74,7 +77,6 @@ export default function App() {
 
   const [rows, setRows] = useState([])
   const [filter, setFilter] = useState('')
-
   const [sorters, setSorters] = useState([]) // [{key, dir:'asc'|'desc'}]
 
   const [editRowId, setEditRowId] = useState(null)
@@ -123,7 +125,7 @@ export default function App() {
     }
   }
 
-  // הפקת רשימת עמודות דינמית: קודם בסיס, ואז כל מפתח נוסף שמופיע בנתונים
+  // בניית רשימת עמודות דינמית: בסיס + כל מפתח נוסף שמופיע בנתונים ואינו בשדות המוחרגים
   const columns = useMemo(() => {
     const set = new Set(BASE_COLUMNS)
     for (const r of rows) {
@@ -153,7 +155,6 @@ export default function App() {
         const av = a?.[s.key]
         const bv = b?.[s.key]
         let cmp
-        // מיון חכם לתאריכים ומספרים
         if (s.key === 'active_until' || s.key === 'created_at') {
           const ad = new Date(String(av || '').replace(' ', 'T')).getTime() || 0
           const bd = new Date(String(bv || '').replace(' ', 'T')).getTime() || 0
@@ -191,7 +192,7 @@ export default function App() {
 
   function beginEdit(r) {
     setEditRowId(r.id)
-    setEditDraft(r)
+    setEditDraft({ ...r })
   }
   function cancelEdit() {
     setEditRowId(null)
@@ -205,12 +206,35 @@ export default function App() {
     if (editRowId == null) return
     setErr('')
     try {
+      // מעתיקים ומנקים שדות אסורים
+      const payload = { ...editDraft }
+      for (const k of Object.keys(payload)) {
+        if (IMMUTABLE.has(k) || EXCLUDE.has(k)) {
+          delete payload[k]
+        }
+      }
+
+      // נרמול approved -> boolean
+      if ('approved' in payload) {
+        payload.approved = payload.approved === true || payload.approved === '1' || payload.approved === 1 || payload.approved === 'כן'
+      }
+
+      // נרמול active_until לפורמט "YYYY-MM-DD HH:MM:SS"
+      if ('active_until' in payload && payload.active_until) {
+        const v = String(payload.active_until).trim()
+        if (v.includes('T')) {
+          const withSeconds = /\d{2}:\d{2}:\d{2}$/.test(v) ? v : (v + ':00')
+          payload.active_until = withSeconds.replace('T', ' ')
+        }
+      }
+
       const res = await apiFetch(`/users/${editRowId}`, {
         method: 'PUT',
         auth,
-        body: JSON.stringify({ data: editDraft })
+        body: JSON.stringify({ data: payload })
       })
       if (!res.ok) throw new Error(await res.text())
+
       await load()
       cancelEdit()
     } catch (e) {
@@ -317,14 +341,14 @@ export default function App() {
                   const isEditing = editRowId === r.id
                   const val = isEditing ? editDraft?.[key] : r?.[key]
 
-                  // UI מיוחד לשדות ידועים
+                  // שדות עם UI מיוחד
                   if (key === 'approved') {
                     return (
                       <td key={key}>
                         {isEditing ? (
                           <select
                             className="cell-input"
-                            value={val ? '1' : '0'}
+                            value={(val ? '1' : '0')}
                             onChange={e => changeDraft('approved', e.target.value === '1')}
                           >
                             <option value="0">לא</option>
@@ -350,15 +374,19 @@ export default function App() {
                     )
                   }
 
-                  // ברירת מחדל – עריכה טקסטואלית פשוטה
+                  // ברירת מחדל – לא מאפשרים עריכה לשדות IMMUTABLE
                   return (
                     <td key={key}>
                       {isEditing ? (
-                        <input
-                          className="cell-input"
-                          value={val ?? ''}
-                          onChange={e => changeDraft(key, e.target.value)}
-                        />
+                        IMMUTABLE.has(key) ? (
+                          <span>{String(val ?? '')}</span>
+                        ) : (
+                          <input
+                            className="cell-input"
+                            value={val ?? ''}
+                            onChange={e => changeDraft(key, e.target.value)}
+                          />
+                        )
                       ) : String(val ?? '')}
                     </td>
                   )
