@@ -80,12 +80,11 @@ def send_on_registration(user: Dict[str, Any], extra_message: str = ""):
 • מייל: {email}
 • טלפון: {phone}
 • טלגרם: {telegram}
-• שם משתמש: {username}
 • תוקף: {active_until}
-• מאושר: {approved}
 
 {extra_message.strip() if extra_message else ''}
-
+לאחר בדיקת התשלום, נכניס אותך לקבוצת הטלגרם
+לכל בעיה,יש לפנות למייל זה.
 תודה ובהצלחה,
 Algo Trade
 """
