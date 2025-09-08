@@ -18,7 +18,7 @@ JWT_SECRET = os.getenv("JWT_SECRET", "CHANGE_ME_IN_ENV")
 JWT_ALG = "HS256"
 JWT_EXPIRE_MIN = int(os.getenv("JWT_EXPIRE_MIN", "60"))
 
-DB_URL = os.getenv("DB_URL", "sqlite:///./app.db")
+DB_URL = os.getenv("DB_URL_USERS", "sqlite:///./app.db")
 
 engine = create_engine(DB_URL, connect_args={"check_same_thread": False} if DB_URL.startswith("sqlite") else {})
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
