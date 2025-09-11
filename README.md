@@ -74,3 +74,11 @@ npm i
 npm run dev
 
 uvicorn app:app --host $(grep ^HOST .env | cut -d= -f2) --port $(grep ^PORT .env | cut -d= -f2)
+
+הרצה של הקוד:
+
+באק:
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
+
+פרונט:
+npm run dev

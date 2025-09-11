@@ -3,7 +3,7 @@ import './styles/auth.css'
 
 export default function AuthPage({ onAuth = () => {}, initialTab = 'login' }) {
   // מצב: התחברות / הרשמה
-  const [mode, setMode] = useState(initialTab) // 'login' | 'register'
+  const [mode, setMode] = useState(initialTab)
 
   // שדות התחברות
   const [loginEmail, setLoginEmail] = useState('')
@@ -17,6 +17,7 @@ export default function AuthPage({ onAuth = () => {}, initialTab = 'login' }) {
   const [password, setPassword] = useState('')
   const [phone, setPhone] = useState('')
   const [telegramUser, setTelegramUser] = useState('')
+  const [coupon, setCoupon] = useState('') // ← חדש
 
   // סטטוס
   const [loading, setLoading] = useState(false)
@@ -89,7 +90,8 @@ export default function AuthPage({ onAuth = () => {}, initialTab = 'login' }) {
           email_confirm: emailConfirm.trim().toLowerCase(),
           password,
           phone: phone.trim(),
-          telegram_username: telegramUser.trim()
+          telegram_username: telegramUser.trim(),
+          coupon: coupon.trim() || null // ← חדש
         })
       })
       if (!res.ok) {
@@ -127,6 +129,7 @@ export default function AuthPage({ onAuth = () => {}, initialTab = 'login' }) {
 
         {mode === 'login' ? (
           <form className="auth-form" onSubmit={handleLogin}>
+            {/* כניסה */}
             <Field label="מייל">
               <input
                 dir="ltr"
@@ -138,7 +141,6 @@ export default function AuthPage({ onAuth = () => {}, initialTab = 'login' }) {
                 required
               />
             </Field>
-
             <Field label="סיסמה">
               <input
                 dir="ltr"
@@ -150,125 +152,56 @@ export default function AuthPage({ onAuth = () => {}, initialTab = 'login' }) {
                 required
               />
             </Field>
-
             {error && <div className="auth-error">{error}</div>}
-
             <button className="btn btn--primary auth-submit" disabled={loading}>
               {loading ? 'מתחבר…' : 'התחברות'}
             </button>
           </form>
         ) : (
           <form className="auth-form" onSubmit={handleRegister}>
+            {/* הרשמה */}
             <div className="grid-2">
               <Field label="שם פרטי">
-                <input
-                  type="text"
-                  placeholder="ישראל"
-                  value={firstName}
-                  onChange={(e) => setFirstName(e.target.value)}
-                  required
-                />
+                <input value={firstName} onChange={(e) => setFirstName(e.target.value)} required />
               </Field>
               <Field label="שם משפחה">
-                <input
-                  type="text"
-                  placeholder="ישראלי"
-                  value={lastName}
-                  onChange={(e) => setLastName(e.target.value)}
-                  required
-                />
+                <input value={lastName} onChange={(e) => setLastName(e.target.value)} required />
               </Field>
             </div>
-
             <div className="grid-2">
               <Field label="מייל">
-                <input
-                  dir="ltr"
-                  type="email"
-                  autoComplete="email"
-                  placeholder="name@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                />
+                <input dir="ltr" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
               </Field>
               <Field label="מייל לאישור">
-                <input
-                  dir="ltr"
-                  type="email"
-                  placeholder="חזור על המייל"
-                  value={emailConfirm}
-                  onChange={(e) => setEmailConfirm(e.target.value)}
-                  required
-                />
+                <input dir="ltr" type="email" value={emailConfirm} onChange={(e) => setEmailConfirm(e.target.value)} required />
               </Field>
             </div>
-
             <Field label="סיסמה">
-              <input
-                dir="ltr"
-                type="password"
-                autoComplete="new-password"
-                placeholder="לפחות 6 תווים"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                minLength={6}
-              />
+              <input dir="ltr" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} />
             </Field>
-
             <div className="grid-2">
               <Field label="טלפון">
-                <input
-                  dir="ltr"
-                  type="tel"
-                  placeholder="+972-5X-XXXXXXX"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  required
-                  pattern="[0-9+\-() ]{7,}"
-                  title="הקלד מספר טלפון תקין"
-                />
+                <input dir="ltr" type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} required />
               </Field>
               <Field label="שם משתמש בטלגרם">
-                <input
-                  dir="ltr"
-                  type="text"
-                  placeholder="@username"
-                  value={telegramUser}
-                  onChange={(e) => setTelegramUser(e.target.value)}
-                  required
-                />
+                <input dir="ltr" type="text" value={telegramUser} onChange={(e) => setTelegramUser(e.target.value)} required />
               </Field>
             </div>
 
-            {email && emailConfirm && email.trim().toLowerCase() !== emailConfirm.trim().toLowerCase() && (
-              <div className="auth-hint">⚠️ המיילים לא תואמים</div>
-            )}
-            {error && <div className="auth-error">{error}</div>}
+            {/* ← חדש: שדה קופון */}
+            <Field label="קופון (לא חובה)">
+              <input dir="ltr" type="text" value={coupon} onChange={(e) => setCoupon(e.target.value)} />
+            </Field>
 
-            <button
-              className="btn btn--primary auth-submit"
-              disabled={
-                loading ||
-                !firstName.trim() ||
-                !lastName.trim() ||
-                !email.trim() ||
-                !emailConfirm.trim() ||
-                email.trim().toLowerCase() !== emailConfirm.trim().toLowerCase() ||
-                !password ||
-                password.length < 6 ||
-                !phone.trim() ||
-                !telegramUser.trim()
-              }
-            >
+            {error && <div className="auth-error">{error}</div>}
+            <button className="btn btn--primary auth-submit" disabled={loading}>
               {loading ? 'נרשם…' : 'הרשמה'}
             </button>
           </form>
         )}
 
         <div className="auth-footnote">
-          פרטי ההרשמה נשמרים בבסיס הנתונים (Users): שם, טלפון ו־Telegram בנוסף למייל וסיסמה.
+          פרטי ההרשמה נשמרים בבסיס הנתונים (Users): שם, טלפון, Telegram, קופון ועוד.
         </div>
       </div>
     </div>

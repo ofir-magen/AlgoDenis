@@ -1,11 +1,10 @@
 // frontend/src/pages/Pay.jsx
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 export default function Pay() {
   // ENV (ערוך ב-frontend/.env)
+  const DEFAULT_PRICE = import.meta.env.VITE_SUB_PRICE_NIS || '49'
   const BIT_PHONE = import.meta.env.VITE_BIT_PHONE || ''
-  const PRICE_NIS = import.meta.env.VITE_SUB_PRICE_NIS || '49'
-  // כתובת תמונת ה-QR: או מ-.env או מקובץ סטטי ב-public/bit-qr.png
   const QR_URL = import.meta.env.VITE_BIT_QR_URL || '/bit-qr.png'
 
   // אימייל לחשבון (נשמר אחרי הרשמה/כניסה)
@@ -13,9 +12,63 @@ export default function Pay() {
     try { return localStorage.getItem('user_email') || '' } catch { return '' }
   }, [])
 
+  // API base
+  const API_BASE = useMemo(() => {
+    const envUrl = import.meta.env.VITE_API_URL
+    if (envUrl) return envUrl.replace(/\/+$/, '')
+    const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:'
+    const host = typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1'
+    return `${isHttps ? 'https' : 'http'}://${host}:8000/api`
+  }, [])
+
+  // מצב מחיר
+  const [price, setPrice] = useState({
+    base: Number(DEFAULT_PRICE),
+    final: Number(DEFAULT_PRICE),
+    discount_percent: 0,
+    coupon: null,
+    valid: false,
+    loading: !!email
+  })
   const [copied, setCopied] = useState('')
+
+  useEffect(() => {
+    let abort = false
+    async function fetchPrice() {
+      if (!email) return
+      try {
+        setPrice(p => ({ ...p, loading: true }))
+        const url = `${API_BASE}/price?email=${encodeURIComponent(email)}`
+        const res = await fetch(url)
+        if (!res.ok) throw new Error('Price fetch failed')
+        const data = await res.json()
+        if (abort) return
+        setPrice({
+          base: Number(data.base ?? DEFAULT_PRICE),
+          final: Number(data.final ?? data.base ?? DEFAULT_PRICE),
+          discount_percent: Number(data.discount_percent ?? 0),
+          coupon: data.coupon ?? null,
+          valid: !!data.valid,
+          loading: false
+        })
+      } catch {
+        if (abort) return
+        setPrice({
+          base: Number(DEFAULT_PRICE),
+          final: Number(DEFAULT_PRICE),
+          discount_percent: 0,
+          coupon: null,
+          valid: false,
+          loading: false
+        })
+      }
+    }
+    fetchPrice()
+    return () => { abort = true }
+  }, [email, API_BASE, DEFAULT_PRICE])
+
   const copy = async (txt) => {
-    try { await navigator.clipboard.writeText(txt); setCopied(txt) } catch {}
+    try { await navigator.clipboard.writeText(String(txt)); setCopied(String(txt)) } catch {}
     setTimeout(() => setCopied(''), 1200)
   }
 
@@ -63,9 +116,24 @@ export default function Pay() {
           <label className="field">
             <div className="field__label">סכום לתשלום (₪)</div>
             <div className="field__control" style={{ display: 'flex', gap: 8 }}>
-              <input type="text" value={PRICE_NIS} readOnly style={{ flex: 1 }} />
-              <button type="button" className="btn" onClick={() => copy(PRICE_NIS)}>העתק</button>
+              <input
+                type="text"
+                value={price.loading ? '...' : String(price.final)}
+                readOnly
+                style={{ flex: 1 }}
+              />
+              <button type="button" className="btn" onClick={() => copy(price.loading ? DEFAULT_PRICE : price.final)}>
+                העתק
+              </button>
             </div>
+            {price.valid && price.discount_percent > 0 && (
+              <small style={{ opacity: .85 }}>
+                קופון “{price.coupon}” הופעל: הנחה {price.discount_percent}% ({price.base} → {price.final})
+              </small>
+            )}
+            {!price.valid && email && (
+              <small className="auth-hint">אין קופון פעיל למשתמש זה. מחיר בסיס: ₪{price.base}</small>
+            )}
           </label>
 
           <label className="field">

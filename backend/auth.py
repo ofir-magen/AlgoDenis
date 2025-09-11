@@ -1,11 +1,15 @@
+# backend/auth.py
 import os
 import sys
 import datetime as dt
+from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Query
 from pydantic import BaseModel, EmailStr, constr
-from sqlalchemy import Column, Integer, String, DateTime, create_engine, select, Boolean
+from sqlalchemy import (
+    Column, Integer, String, DateTime, create_engine, select, Boolean, Float, func
+)
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
 from passlib.context import CryptContext
 from jose import jwt, JWTError, ExpiredSignatureError
@@ -13,19 +17,30 @@ from jose import jwt, JWTError, ExpiredSignatureError
 # === מיילר ===
 from mailer import send_on_registration
 
-# === ENV / CONFIG ===
+# =========================
+# ENV / CONFIG
+# =========================
 JWT_SECRET = os.getenv("JWT_SECRET", "CHANGE_ME_IN_ENV")
 JWT_ALG = "HS256"
 JWT_EXPIRE_MIN = int(os.getenv("JWT_EXPIRE_MIN", "60"))
 
-DB_URL = os.getenv("DB_URL_USERS", "sqlite:///./app.db")
+# מחיר בסיס לתשלום (אפשר להגדיר גם VITE_SUB_PRICE_NIS לשמירה על תאימות)
+BASE_PRICE_NIS = float(os.getenv("BASE_PRICE_NIS", os.getenv("VITE_SUB_PRICE_NIS", "49")))
 
-engine = create_engine(DB_URL, connect_args={"check_same_thread": False} if DB_URL.startswith("sqlite") else {})
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+# =========================
+# Users DB (נפרד)
+# =========================
+# ברירת מחדל: Users.db בתיקיית backend. אפשר להגדיר ENV: DB_URL_USERS
+USERS_DB_URL = os.getenv("DB_URL_USERS", "sqlite:///./Users.db")
+
+UsersEngine = create_engine(
+    USERS_DB_URL,
+    connect_args={"check_same_thread": False} if USERS_DB_URL.startswith("sqlite") else {},
+)
+SessionLocal = sessionmaker(bind=UsersEngine, autoflush=False, autocommit=False)
 Base = declarative_base()
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# === DB Model ===
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True)
@@ -34,17 +49,36 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     active_until = Column(DateTime, nullable=True)
 
-    # שדות נוספים (אם קיימים אצלך בטבלה – זה יעבוד; אם לא קיימים, זה פשוט לא ימולא)
+    # שדות נוספים
     first_name = Column(String(120), nullable=True)
     last_name = Column(String(120), nullable=True)
     phone = Column(String(64), nullable=True)
     telegram_username = Column(String(120), nullable=True)
-    username = Column(String(120), nullable=True)  # אם אתה שומר שם משתמש
+    username = Column(String(120), nullable=True)
     approved = Column(Boolean, nullable=True)
+
+    # שדה קופון שנשמר למשתמש בזמן הרשמה (לוגי בלבד; ולידציה מול DB הקופונים)
+    coupon = Column(String(120), nullable=True)
+
     created_at = Column(DateTime, default=dt.datetime.utcnow)
     updated_at = Column(DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow)
 
-Base.metadata.create_all(bind=engine)
+# יצירת טבלת המשתמשים אם לא קיימת
+Base.metadata.create_all(bind=UsersEngine)
+
+# מיגרציה עדינה: הוספת עמודת coupon אם חסרה (ב-SQLite)
+def _ensure_coupon_column():
+    try:
+        with UsersEngine.begin() as conn:
+            rows = conn.exec_driver_sql("PRAGMA table_info(users);").fetchall()
+            col_names = [r[1] for r in rows]  # [cid, name, type, notnull, dflt_value, pk]
+            if "coupon" not in col_names:
+                conn.exec_driver_sql("ALTER TABLE users ADD COLUMN coupon TEXT;")
+                print("[AUTH] Added 'coupon' column to users table")
+    except Exception as e:
+        print(f"[AUTH] ensure coupon column failed: {type(e).__name__}: {e}", file=sys.stderr)
+
+_ensure_coupon_column()
 
 def get_db():
     db = SessionLocal()
@@ -53,7 +87,39 @@ def get_db():
     finally:
         db.close()
 
-# === Schemas ===
+# =========================
+# Coupons DB (נפרד)
+# =========================
+# משתמש ב-ENV בשם Discount_Coupon (למשל: sqlite:///./DiscountCoupon.db)
+_env_url = os.getenv("Discount_Coupon", "").strip()
+if _env_url:
+    COUPONS_DB_URL = _env_url
+else:
+    # אם לא הוגדר ENV — ברירת מחדל backend/DiscountCoupon.db (נתיב מוחלט כדי למנוע בלבול בהרצה)
+    here = Path(__file__).resolve().parent
+    COUPONS_DB_URL = f"sqlite:///{(here / 'DiscountCoupon.db').as_posix()}"
+
+print(f"[COUPONS] Using DB: {COUPONS_DB_URL}")
+
+CouponsEngine = create_engine(
+    COUPONS_DB_URL,
+    connect_args={"check_same_thread": False} if COUPONS_DB_URL.startswith("sqlite") else {},
+)
+CouponsSessionLocal = sessionmaker(bind=CouponsEngine, autoflush=False, autocommit=False)
+CouponsBase = declarative_base()
+
+class Coupon(CouponsBase):
+    __tablename__ = "coupons"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(120), unique=True, index=True, nullable=False)   # למשל "אופיר" או "SALE20"
+    discount_percent = Column(Float, nullable=False, default=0.0)         # 10.0 == 10%
+
+# יצירת טבלת הקופונים אם לא קיימת
+CouponsBase.metadata.create_all(bind=CouponsEngine)
+
+# =========================
+# Pydantic Schemas
+# =========================
 class RegisterIn(BaseModel):
     email: EmailStr
     password: constr(min_length=6, max_length=128)
@@ -63,7 +129,8 @@ class RegisterIn(BaseModel):
     last_name: Optional[str] = None
     phone: Optional[str] = None
     telegram_username: Optional[str] = None
-    username: Optional[str] = None  # אם יש
+    username: Optional[str] = None
+    coupon: Optional[str] = None  # קופון שהמשתמש הזין בזמן הרשמה
 
 class LoginIn(BaseModel):
     email: EmailStr
@@ -73,7 +140,9 @@ class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
 
-# === Helpers ===
+# =========================
+# Helpers (Passwords & JWT)
+# =========================
 def hash_password(pw: str) -> str:
     return pwd_ctx.hash(pw)
 
@@ -96,7 +165,9 @@ def verify_jwt(token: str) -> Optional[str]:
         print(f"[AUTH] token invalid: {type(e).__name__}", file=sys.stderr)
         return None
 
-# === Router ===
+# =========================
+# Router & Endpoints
+# =========================
 router = APIRouter(prefix="/api", tags=["auth"])
 
 @router.post("/register", response_model=TokenOut)
@@ -122,6 +193,7 @@ def register(
         phone=body.phone,
         telegram_username=body.telegram_username,
         username=body.username,
+        coupon=(body.coupon or None),
     )
     db.add(user)
     db.commit()
@@ -137,6 +209,7 @@ def register(
         "phone": user.phone,
         "telegram_username": user.telegram_username,
         "username": user.username,
+        "coupon": user.coupon,
         "active_until": user.active_until.strftime("%Y-%m-%d %H:%M:%S") if user.active_until else "",
         "approved": user.approved,
     }
@@ -161,3 +234,61 @@ def login(body: LoginIn, db: Session = Depends(get_db)):
 
     token = create_jwt(user.email)
     return TokenOut(access_token=token)
+
+# === Pricing API (מחיר לפי קופון) ===
+@router.get("/price")
+def get_price(
+    email: EmailStr = Query(..., description="מייל המשתמש לחישוב קופון"),
+    base: Optional[float] = Query(None, description="מחיר בסיס ידני (לא חובה)"),
+    db: Session = Depends(get_db),
+):
+    """
+    מחזיר מחיר לאחר הנחת קופון (אם יש). הקופון עצמו נשמר אצל המשתמש (users.coupon),
+    אך שיעור ההנחה נשלף מבסיס נתוני הקופונים (DiscountCoupon.db).
+    """
+    base_price = float(base) if base is not None else BASE_PRICE_NIS
+
+    # מציאת המשתמש ב-Users DB
+    user = db.execute(select(User).where(func.lower(User.email) == email.lower())).scalar_one_or_none()
+    if not user or not (user.coupon or "").strip():
+        return {
+            "email": email,
+            "base": round(base_price, 2),
+            "discount_percent": 0.0,
+            "final": round(base_price, 2),
+            "coupon": None,
+            "valid": False,
+        }
+
+    user_coupon = (user.coupon or "").strip()
+
+    # חיפוש קופון ב-Coupons DB (נפרד)
+    ddb = CouponsSessionLocal()
+    try:
+        coup = ddb.execute(
+            select(Coupon).where(func.lower(Coupon.name) == user_coupon.lower())
+        ).scalar_one_or_none()
+    finally:
+        ddb.close()
+
+    if not coup:
+        return {
+            "email": email,
+            "base": round(base_price, 2),
+            "discount_percent": 0.0,
+            "final": round(base_price, 2),
+            "coupon": user_coupon,
+            "valid": False,
+        }
+
+    discount = float(coup.discount_percent or 0.0)
+    final_price = round(base_price * (1.0 - discount / 100.0), 2)
+
+    return {
+        "email": email,
+        "base": round(base_price, 2),
+        "discount_percent": round(discount, 2),
+        "final": final_price,
+        "coupon": user_coupon,
+        "valid": True,
+    }
