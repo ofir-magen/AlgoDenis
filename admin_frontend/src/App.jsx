@@ -15,29 +15,39 @@ function apiFetch(path, { auth, ...init } = {}) {
 
 // כותרות ידידותיות לעמודות
 const LABELS = {
-  id: 'ID',
-  first_name: 'שם פרטי',
-  last_name: 'שם משפחה',
-  email: 'מייל',
-  telegram_username: 'טלגרם',
-  phone: 'טלפון',
-  approved: 'מאושר',
-  active_until: 'תוקף',
-  created_at: 'נוצר',
-}
+   id: 'ID',
+   first_name: 'שם פרטי',
+   last_name: 'שם משפחה',
+   email: 'מייל',
+   telegram_username: 'טלגרם',
+   phone: 'טלפון',
+   approved: 'מאושר',
+   active_until: 'תוקף',
+   created_at: 'נוצר',
+   updated_at: 'עודכן',
+   coupon: 'קופון',
+   price_nis: 'מחיר (₪)',
+   affiliateor: 'Affiliateor',
+   affiliateor_of: 'Affiliateor Of',
+ }
 
 // עמודות בסיס שיופיעו (אם קיימות במידע)
-const BASE_COLUMNS = [
-  'id',
-  'first_name',
-  'last_name',
-  'email',
-  'telegram_username',
-  'phone',
-  'approved',
-  'active_until',
-  'created_at',
-]
+ const BASE_COLUMNS = [
+   'id',
+   'first_name',
+   'last_name',
+   'email',
+   'telegram_username',
+   'phone',
+   'approved',
+   'active_until',
+   'created_at',
+   'updated_at',
+   'coupon',
+   'price_nis',
+   'affiliateor',
+   'affiliateor_of',
+ ]
 
 // שדות שלא מציגים בטבלה
 const EXCLUDE = new Set(['password', 'password_hash', 'token'])
@@ -209,14 +219,16 @@ export default function App() {
       // מעתיקים ומנקים שדות אסורים
       const payload = { ...editDraft }
       for (const k of Object.keys(payload)) {
-        if (IMMUTABLE.has(k) || EXCLUDE.has(k)) {
-          delete payload[k]
-        }
+        if (IMMUTABLE.has(k) || EXCLUDE.has(k)) delete payload[k]
       }
 
       // נרמול approved -> boolean
       if ('approved' in payload) {
-        payload.approved = payload.approved === true || payload.approved === '1' || payload.approved === 1 || payload.approved === 'כן'
+        payload.approved =
+          payload.approved === true ||
+          payload.approved === '1' ||
+          payload.approved === 1 ||
+          payload.approved === 'כן'
       }
 
       // נרמול active_until לפורמט "YYYY-MM-DD HH:MM:SS"
@@ -226,6 +238,17 @@ export default function App() {
           const withSeconds = /\d{2}:\d{2}:\d{2}$/.test(v) ? v : (v + ':00')
           payload.active_until = withSeconds.replace('T', ' ')
         }
+      }
+
+      // המרה של מחרוזות ריקות ל-NULL בשדות טקסטואליים מסוימים
+      for (const key of ['coupon', 'affiliateor', 'affiliateor_of', 'username', 'telegram_username', 'phone', 'first_name', 'last_name']) {
+        if (key in payload && String(payload[key]).trim() === '') payload[key] = null
+      }
+
+      // price_nis: אם ריק – נרשום NULL; אם מספר – נהפוך ל-float
+      if ('price_nis' in payload) {
+        const v = String(payload.price_nis).trim()
+        payload.price_nis = v === '' ? null : Number(v)
       }
 
       const res = await apiFetch(`/users/${editRowId}`, {
@@ -370,6 +393,23 @@ export default function App() {
                             onChange={e => changeDraft('active_until', e.target.value)}
                           />
                         ) : formatDateTime(r.active_until)}
+                      </td>
+                    )
+                  }
+
+                  if (key === 'price_nis') {
+                    return (
+                      <td key={key}>
+                        {isEditing ? (
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            className="cell-input"
+                            value={val ?? ''}
+                            onChange={e => changeDraft('price_nis', e.target.value)}
+                          />
+                        ) : (val == null ? '' : String(val))}
                       </td>
                     )
                   }

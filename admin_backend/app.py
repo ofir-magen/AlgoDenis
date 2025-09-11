@@ -8,10 +8,13 @@ from pydantic import BaseModel
 from jose import jwt, JWTError
 from dotenv import load_dotenv
 
-from sqlalchemy import create_engine, MetaData, Table, select, update, delete, text as sql_text
+from sqlalchemy import (
+    create_engine, MetaData, Table, select, update, delete, text as sql_text,
+    DateTime as SATime, Boolean as SABool, Integer as SAInt, Float as SAFloat
+)
 from sqlalchemy.orm import sessionmaker
 
-# ===== ENV =====
+# ================== ENV ==================
 load_dotenv()
 
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
@@ -21,17 +24,35 @@ JWT_SECRET = os.getenv("ADMIN_JWT_SECRET", "CHANGE_ME")
 JWT_ALG = "HS256"
 JWT_EXPIRE_MIN = int(os.getenv("ADMIN_JWT_EXPIRE_MIN", "240"))
 
-# DB location:
-# עדיפות ל-USERS_DB_URL; אם לא הוגדר, ניקח USERS_DB_PATH (sqlite קובץ)
-USERS_DB_URL = os.getenv("USERS_DB_URL") or ""
-if not USERS_DB_URL:
-    users_db_path = os.getenv("USERS_DB_PATH") or os.path.join(os.getcwd(), "app.db")
-    # sqlite URL – נתיב מוחלט
-    if not users_db_path.startswith("/"):
-        users_db_path = os.path.abspath(users_db_path)
-    USERS_DB_URL = f"sqlite:///{users_db_path}"
+# ---- Resolve DB URL/Path ----
+def _resolve_users_db_url() -> str:
+    """
+    Priority:
+      1) USERS_DB_URL — full SQLAlchemy URL like sqlite:///../backend/Users.db
+      2) USERS_DB_PATH — can be:
+           - a full SQLAlchemy URL (starts with scheme://)
+           - or a filesystem path (relative or absolute) for SQLite
+    """
+    url = (os.getenv("USERS_DB_URL") or "").strip()
+    if url:
+        return url
 
-is_sqlite = USERS_DB_URL.startswith("sqlite:/")
+    path = (os.getenv("USERS_DB_PATH") or "").strip()
+    if not path:
+        # default: local app.db next to this file
+        default_path = os.path.abspath(os.path.join(os.getcwd(), "app.db"))
+        return f"sqlite:///{default_path}"
+
+    # If already a URL (has '://'), return as-is
+    if "://" in path:
+        return path
+
+    # Treat as filesystem path (can be relative)
+    abs_path = os.path.abspath(path)
+    return f"sqlite:///{abs_path}"
+
+USERS_DB_URL = _resolve_users_db_url()
+is_sqlite = USERS_DB_URL.startswith("sqlite:")
 
 engine = create_engine(
     USERS_DB_URL,
@@ -41,24 +62,29 @@ engine = create_engine(
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 meta = MetaData()
-# נטען את טבלת המשתמשים ברפלקשן – שלא ננחש סכימה
+
+# Reflect users table (no schema hardcoding)
 users = Table("users", meta, autoload_with=engine)
 
-# ===== FastAPI =====
+# ================== APP ==================
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # לשנות לפרודקשן
+    allow_origins=["*"],  # TODO: restrict in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ===== JWT helpers =====
+# ================== JWT helpers ==================
 def create_token(sub: str) -> str:
     now = dt.datetime.utcnow()
-    payload = {"sub": sub, "iat": int(now.timestamp()), "exp": int((now + dt.timedelta(minutes=JWT_EXPIRE_MIN)).timestamp())}
+    payload = {
+        "sub": sub,
+        "iat": int(now.timestamp()),
+        "exp": int((now + dt.timedelta(minutes=JWT_EXPIRE_MIN)).timestamp()),
+    }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
 
 def require_auth(authorization: Optional[str] = Header(default=None)) -> str:
@@ -71,19 +97,19 @@ def require_auth(authorization: Optional[str] = Header(default=None)) -> str:
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-# ===== Schemas =====
+# ================== Schemas ==================
 class LoginIn(BaseModel):
     username: str
     password: str
 
-# ===== Utils =====
+# ================== Utils ==================
 def parse_bool(v: Any) -> bool:
     if isinstance(v, bool):
         return v
     if v is None:
         return False
     s = str(v).strip().lower()
-    return s in {"1", "true", "yes", "y", "on", "✓", "כן", "true/1"}
+    return s in {"1", "true", "yes", "y", "on", "✓", "כן"}
 
 def parse_dt(value: Any) -> Optional[dt.datetime]:
     if value in (None, "", "null"):
@@ -96,15 +122,13 @@ def parse_dt(value: Any) -> Optional[dt.datetime]:
         except Exception:
             pass
     s = str(value).strip()
-
-    # normalize common browser input
     s = s.replace(" ,", ",").replace(", ", ",")
-    # Try several formats
+
     fmts = [
-        "%Y-%m-%dT%H:%M",          # from <input type="datetime-local">
+        "%Y-%m-%dT%H:%M",    # <input type="datetime-local">
         "%Y-%m-%d %H:%M",
         "%Y-%m-%d %H:%M:%S",
-        "%d/%m/%Y,%H:%M",          # locale like "07/10/2025,19:35"
+        "%d/%m/%Y,%H:%M",
         "%d/%m/%Y, %H:%M",
         "%d.%m.%Y %H:%M",
         "%d-%m-%Y %H:%M",
@@ -114,9 +138,7 @@ def parse_dt(value: Any) -> Optional[dt.datetime]:
             return dt.datetime.strptime(s, f)
         except Exception:
             pass
-    # Last chance: ISO
     try:
-        # add seconds if missing like 2025-10-07T19:35
         if "T" in s and len(s.split(":")) == 2:
             s = s + ":00"
         return dt.datetime.fromisoformat(s.replace("Z", "+00:00")).replace(tzinfo=None)
@@ -126,12 +148,11 @@ def parse_dt(value: Any) -> Optional[dt.datetime]:
 def allowed_columns() -> set:
     return set(c.name for c in users.columns)
 
-IMMUTABLE = {"id", "created_at", "password_hash"}
-EXCLUDE_IN_RESPONSE = set()
+IMMUTABLE = {"id", "created_at", "updated_at", "password_hash"}
+EXCLUDE_IN_RESPONSE = set()  # add secrets if needed
 
 def row_to_dict(row) -> Dict[str, Any]:
     d = dict(row._mapping)
-    # איפוס datetime ל-str קריא
     for k, v in list(d.items()):
         if isinstance(v, dt.datetime):
             d[k] = v.strftime("%Y-%m-%d %H:%M:%S")
@@ -139,10 +160,9 @@ def row_to_dict(row) -> Dict[str, Any]:
         d.pop(k, None)
     return d
 
-# ===== Routes =====
+# ================== Routes ==================
 @app.get("/api/health")
 def health():
-    # בדיקת פרגמות ל-sqlite בלבד (לא חובה)
     try:
         with SessionLocal() as db:
             if is_sqlite:
@@ -170,7 +190,6 @@ def list_users(_: str = Depends(require_auth)):
 @app.put("/api/users/{user_id}")
 async def update_user(user_id: int, request: Request, _: str = Depends(require_auth)):
     raw = await request.json()
-    # תומך גם ב-{"data": {...}} וגם בגוף שטוח
     payload: Dict[str, Any] = raw.get("data") if isinstance(raw, dict) and "data" in raw else raw
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Body must be JSON object")
@@ -182,14 +201,25 @@ async def update_user(user_id: int, request: Request, _: str = Depends(require_a
         if k in IMMUTABLE:
             continue
         if k not in cols:
-            # מתעלמים משדות לא מוכרים (במקום לפוצץ)
             continue
-        if k == "approved":
-            clean[k] = parse_bool(v)
-        elif k == "active_until":
+
+        coltype = users.c[k].type
+        # DateTime fields
+        if isinstance(coltype, SATime):
             clean[k] = parse_dt(v)
+        # Booleans
+        elif isinstance(coltype, SABool):
+            clean[k] = parse_bool(v)
+        # Numeric -> allow NULL if empty
+        elif isinstance(coltype, (SAInt, SAFloat)):
+            clean[k] = None if v in ("", None) else v
+        # Default: keep value as-is (strings, etc.)
         else:
             clean[k] = v
+
+    # always set updated_at on server side
+    if "updated_at" in cols:
+        clean["updated_at"] = dt.datetime.utcnow()
 
     if not clean:
         raise HTTPException(status_code=400, detail="No updatable fields provided")
@@ -201,13 +231,12 @@ async def update_user(user_id: int, request: Request, _: str = Depends(require_a
             if r.rowcount == 0:
                 raise HTTPException(status_code=404, detail="User not found")
             db.commit()
-            # החזרת הרשומה המעודכנת
             row = db.execute(select(users).where(users.c.id == user_id)).first()
             return row_to_dict(row)
     except HTTPException:
         raise
     except Exception as e:
-        # מחזירים שגיאה קריאה במקום 500 עמום
+        # readable error instead of generic 500
         raise HTTPException(status_code=400, detail=f"Update failed: {type(e).__name__}: {e}")
 
 @app.delete("/api/users/{user_id}")
