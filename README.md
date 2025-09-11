@@ -82,3 +82,9 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000
 
 פרונט:
 npm run dev
+
+אדמין באק:
+python -m uvicorn app:app --host 0.0.0.0 --port 8010
+
+אדמין פרונט:
+npm run dev -- --host 0.0.0.0 --port 5174
