@@ -24,6 +24,7 @@ JWT_SECRET = os.getenv("JWT_SECRET", "CHANGE_ME_IN_ENV")
 JWT_ALG = "HS256"
 JWT_EXPIRE_MIN = int(os.getenv("JWT_EXPIRE_MIN", "60"))
 
+# מחיר בסיס (נשלף גם מה-ENV של הפרונט אם הוגדר שם)
 BASE_PRICE_NIS = float(os.getenv("BASE_PRICE_NIS", os.getenv("VITE_SUB_PRICE_NIS", "49")))
 
 # =========================
@@ -55,11 +56,11 @@ class User(Base):
     username = Column(String(120), nullable=True)
     approved = Column(Boolean, nullable=True)
 
-    # קופון ומשתמש מחיר
+    # קופון/מחיר
     coupon = Column(String(120), nullable=True)
     price_nis = Column(Float, nullable=True)
 
-    # שדות אפיליאציה
+    # אפיליאציה
     affiliateor = Column(String(120), nullable=True)       # מי שהפנה את המשתמש
     affiliateor_of = Column(String(120), nullable=True)    # את מי המשתמש הפנה
 
@@ -70,7 +71,7 @@ class User(Base):
 Base.metadata.create_all(bind=UsersEngine)
 
 
-# === מיגרציות (SQLite) ===
+# === מיגרציות (SQLite) — הוספת עמודות אם חסרות ===
 def _ensure_column(name: str, col_type: str):
     try:
         with UsersEngine.begin() as conn:
@@ -234,6 +235,21 @@ def register(
     db.commit()
     db.refresh(user)
 
+    # ==== הכנת "תוקף" לפורמט קריא במייל ====
+    expiry_dt = user.active_until or dt.datetime.utcnow()
+    try:
+        from zoneinfo import ZoneInfo  # Python 3.9+
+        tz_name = os.getenv("TZ_MAIL", "Asia/Jerusalem")
+        # אם נשמר ללא tzinfo נניח שזה UTC
+        if expiry_dt.tzinfo is None:
+            expiry_dt = expiry_dt.replace(tzinfo=dt.timezone.utc)
+        expiry_local = expiry_dt.astimezone(ZoneInfo(tz_name))
+    except Exception:
+        expiry_local = expiry_dt  # fallback ללא המרה
+
+    active_until_str = expiry_local.strftime("%d.%m.%Y %H:%M")
+    # ========================================
+
     # שליחת מייל
     extra_msg = os.getenv("EMAIL_REG_MESSAGE", "").strip()
     user_dict = {
@@ -248,6 +264,7 @@ def register(
         "price_nis": user.price_nis,
         "affiliateor": user.affiliateor,
         "affiliateor_of": user.affiliateor_of,
+        "active_until": active_until_str,  # ← נשלח למיילר
     }
     background_tasks.add_task(send_on_registration, user_dict, extra_msg)
 
@@ -265,3 +282,41 @@ def login(body: LoginIn, db: Session = Depends(get_db)):
     if user.active_until and user.active_until < dt.datetime.utcnow():
         raise HTTPException(status_code=403, detail="Account expired")
     return TokenOut(access_token=create_jwt(user.email))
+
+
+# === /api/price – החזרת מחיר למייל נתון ===
+class PriceOut(BaseModel):
+    base: float
+    final: float
+    discount_percent: float = 0.0
+    coupon: Optional[str] = None
+    valid: bool = False
+
+@router.get("/price", response_model=PriceOut)
+def get_price(email: EmailStr = Query(...), db: Session = Depends(get_db)):
+    """
+    מחזיר מחיר בסיס/סופי למשתמש לפי המייל.
+    אם המשתמש קיים עם price_nis/coupon – נחזיר את זה.
+    אם לא – נחזיר מחיר בסיס בלבד.
+    """
+    base = BASE_PRICE_NIS
+    user = db.execute(select(User).where(User.email == email.lower())).scalar_one_or_none()
+    if not user:
+        return PriceOut(base=base, final=base, discount_percent=0.0, coupon=None, valid=False)
+
+    final = float(user.price_nis or base)
+    coup = (user.coupon or "").strip() or None
+    discount = 0.0
+    if coup and final < base:
+        try:
+            discount = round((1.0 - (final / base)) * 100.0, 2)
+        except Exception:
+            discount = 0.0
+
+    return PriceOut(
+        base=base,
+        final=final,
+        discount_percent=discount if discount > 0 else 0.0,
+        coupon=coup,
+        valid=bool(coup and discount > 0),
+    )
