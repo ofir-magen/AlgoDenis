@@ -1,9 +1,10 @@
+// frontend/src/pages/Login.jsx
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { login } from '../api.js'
 
 export default function Login() {
-  const [username, setUsername] = useState('')
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [err, setErr] = useState('')
   const navigate = useNavigate()
@@ -11,8 +12,10 @@ export default function Login() {
   const onSubmit = async (e) => {
     e.preventDefault()
     setErr('')
+
     try {
-      await login(username, password)
+      // העברת המייל בפרמטר username (תקן OAuth2PasswordRequestForm)
+      await login(email, password)
       navigate('/dashboard')
     } catch (e) {
       setErr(e.message)
@@ -22,13 +25,26 @@ export default function Login() {
   return (
     <div className="container">
       <div className="card">
-        <h2 style={{textAlign:'center'}}>התחברות שותפים</h2>
+        <h2 style={{textAlign:'center'}}>התחברות</h2>
         <form onSubmit={onSubmit}>
-          <input className="input" placeholder="שם משתמש" value={username} onChange={e=>setUsername(e.target.value)} />
-          <input className="input" placeholder="סיסמה" type="password" value={password} onChange={e=>setPassword(e.target.value)} />
+          <input
+            className="input"
+            placeholder="אימייל"
+            type="email"
+            value={email}
+            onChange={e=>setEmail(e.target.value)}
+            required
+          />
+          <input
+            className="input"
+            placeholder="סיסמה"
+            type="password"
+            value={password}
+            onChange={e=>setPassword(e.target.value)}
+            required
+          />
           <button className="button" type="submit">כניסה</button>
           {err && <div className="helper" style={{color:'var(--danger)'}}>{err}</div>}
-          <div className="helper">הכנס פרטי כניסה שסופקו ע"י המנהל</div>
         </form>
       </div>
     </div>
