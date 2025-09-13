@@ -1,90 +1,118 @@
-# GPT + PDF Chat (React + FastAPI WebSocket)
+# Project Deployment & Run Instructions
 
-Build date: 2025-08-23T20:17:52
+This README explains how to set up and run your project on a fresh Ubuntu server. 
+It includes steps for the backend, admin backend, frontend apps, and the Telegram worker.
 
-This project combines your GPT+PDF code with a WebSocket full-stack app.
+---
 
-- **Backend (FastAPI)** exposes `/ws` and returns GPT answers with incremental ids.
-- **Frontend (React + Vite)** connects via WebSocket and shows a chat-like history, newest on top.
-
-## Folder Structure
-
-```
-gpt-pdf-chat/
-├─ backend/
-│  ├─ ai.py                 # YOUR file: GPT integration (ask_text, ask_with_pdf). Reads .env for keys.
-│  ├─ exportForWeb.py       # YOUR file: Maya PDF downloader. Should return a local PDF path.
-│  ├─ .env                  # Your secrets (API keys). Not for git.
-│  ├─ main.py               # FastAPI WebSocket server. Calls ai.py & exportForWeb.py.
-│  ├─ requirements.txt      # Backend dependencies (fastapi, uvicorn, python-dotenv).
-│  ├─ pdf_store/            # Created at runtime to store downloaded PDFs.
-│  └─ _examples/
-│     └─ user_main_example.py  # Your original main.py for reference (won't be executed).
-│
-└─ frontend/
-   ├─ index.html
-   ├─ package.json          # Vite + React dev setup
-   ├─ vite.config.js
-   └─ src/
-      ├─ main.jsx
-      └─ App.jsx            # Chat UI: supports optional report_id; saves history (max 1000) to localStorage.
-```
-
-## Run (Local)
-
-### Backend
-
+## 0) Initial Server Setup (One-time)
 ```bash
-cd backend
-python3 -m venv .venv && source .venv/bin/activate
+sudo apt update
+sudo apt install -y python3-venv python3-dev build-essential libffi-dev libssl-dev
+sudo apt install -y python-is-python3
+
+# Install Node.js (v20)
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+
+# Optional: tmux for persistent sessions
+sudo apt install -y tmux
+
+# Open ports (if firewall is enabled)
+sudo ufw allow 8000,8010,5173,5174/tcp
+sudo ufw status
+```
+
+---
+
+## 1) Backend (port 8000)
+```bash
+cd ~/main_algo/AlgoDenis/backend
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
 pip install -r requirements.txt
-python -m uvicorn main:app --reload --port 8000
+uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-- WebSocket endpoint: `ws://localhost:8000/ws`
-- Health check: `http://localhost:8000/api/health`
+---
 
-### Frontend
+## 2) Admin Backend (port 8010)
+```bash
+cd ~/main_algo/AlgoDenis/admin_backend
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+uvicorn app:app --host 0.0.0.0 --port 8010
+```
+
+---
+
+## 3) Admin Frontend
+1. Create `.env.production` in `admin_frontend/`:
+```
+VITE_ADMIN_API_URL=http://YOUR_SERVER_IP:8010
+```
+2. Install and run:
 
 ```bash
-cd frontend
-npm i
-npm run dev
+cd ~/main_algo/AlgoDenis/admin_frontend
+npm ci || npm install
+npm run dev -- --host --port 5174
+# or build for production:
+npm run build
+npx serve -s dist -l 5174
 ```
 
-Open http://localhost:5173
+---
 
-### Using the App
+## 4) Frontend
+1. Create `.env.production` in `frontend/`:
+```
+VITE_API_URL=http://YOUR_SERVER_IP:8000
+```
+2. Install and run:
 
-- Optionally fill **Report ID** (Maya id, e.g. `P1687146`). If provided, backend will download the PDF and call `ask_with_pdf(prompt, pdf_path)`.
-- If left empty, backend calls `ask_text(prompt)`.
-- Responses include a server-wide `id`, the original `asked` prompt, optional `report_id`, and timestamp.
-- The UI keeps the latest 1000 messages in localStorage (persist across refresh).
+```bash
+cd ~/main_algo/AlgoDenis/frontend
+npm ci || npm install
+npm run dev -- --host --port 5173
+# or build for production:
+npm run build
+npx serve -s dist -l 5173
+```
+
+---
+
+## 5) Telegram Worker
+```bash
+cd ~/main_algo/AlgoDenis/telegram-ai-worker
+python -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+python main.py
+```
+
+---
+
+## 6) Run Services with tmux (Recommended)
+```bash
+tmux new -ds api-main   'cd ~/main_algo/AlgoDenis/backend && source .venv/bin/activate && uvicorn main:app --host 0.0.0.0 --port 8000'
+tmux new -ds api-admin  'cd ~/main_algo/AlgoDenis/admin_backend && source .venv/bin/activate && uvicorn app:app --host 0.0.0.0 --port 8010'
+tmux new -ds fe-admin   'cd ~/main_algo/AlgoDenis/admin_frontend && npm run dev -- --host --port 5174'
+tmux new -ds fe-main    'cd ~/main_algo/AlgoDenis/frontend && npm run dev -- --host --port 5173'
+tmux new -ds tg-worker  'cd ~/main_algo/AlgoDenis/telegram-ai-worker && source .venv/bin/activate && python main.py'
+tmux ls
+```
+
+---
 
 ## Notes
+- Always use `.env.production` for correct API URLs.
 
-- If your `exportForWeb.py` uses a specific function name for PDF download different from common ones, edit `find_export_fn()` in `backend/main.py` to match.
-- If your `ai.py` functions are already async, you can call them directly (remove the run_in_executor wrappers).
-- Ensure `.env` contains your required keys. It is loaded on backend startup.
+- Use `curl http://YOUR_SERVER_IP:8000/docs` or `:8010/docs` to check API availability.
 
-back:
-uvicorn main:app --reload --port 8000
-front:
-npm i
-npm run dev
+- Consider Nginx reverse proxy for production deployment.
 
-uvicorn app:app --host $(grep ^HOST .env | cut -d= -f2) --port $(grep ^PORT .env | cut -d= -f2)
-
-הרצה של הקוד:
-
-באק:
-python -m uvicorn main:app --host 0.0.0.0 --port 8000
-
-פרונט:
-npm run dev
-
-אדמין באק:
-python -m uvicorn app:app --host 0.0.0.0 --port 8010
-
-אדמין פרונט:
-npm run dev -- --host 0.0.0.0 --port 5174
