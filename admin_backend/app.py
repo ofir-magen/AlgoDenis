@@ -1,5 +1,7 @@
+# admin_backend/app.py
 import os
 import datetime as dt
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
@@ -15,7 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import sessionmaker
 
 # ================== ENV ==================
-load_dotenv()
+load_dotenv()  # נטען .env מאותה תיקייה שממנה מריצים או מהסביבה
 
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASS", "admin")
@@ -24,34 +26,30 @@ JWT_SECRET = os.getenv("ADMIN_JWT_SECRET", "CHANGE_ME")
 JWT_ALG = "HS256"
 JWT_EXPIRE_MIN = int(os.getenv("ADMIN_JWT_EXPIRE_MIN", "240"))
 
-# ---- Resolve DB URL/Path ----
-def _resolve_users_db_url() -> str:
+# ================== Users DB (צורה יחידה!) ==================
+def _resolve_users_db_url_only_relative_sqlite() -> str:
     """
-    Priority:
-      1) USERS_DB_URL — full SQLAlchemy URL like sqlite:///../backend/Users.db
-      2) USERS_DB_PATH — can be:
-           - a full SQLAlchemy URL (starts with scheme://)
-           - or a filesystem path (relative or absolute) for SQLite
+    מצפה לערך יחיד בסביבה:
+      USERS_DB_PATH = 'sqlite:///../backend/Users.db'
+    וממיר אותו לנתיב מוחלט ביחס למיקום הקובץ הזה (app.py).
+    לא תומך בשום צורה אחרת.
     """
-    url = (os.getenv("USERS_DB_URL") or "").strip()
-    if url:
-        return url
+    raw = (os.getenv("USERS_DB_PATH") or "").strip()
+    if not raw:
+        raise RuntimeError("USERS_DB_PATH is missing in .env (expected 'sqlite:///../backend/Users.db').")
+    if not raw.startswith("sqlite:///"):
+        raise RuntimeError("USERS_DB_PATH must start with 'sqlite:///' and be relative like '../backend/Users.db'.")
 
-    path = (os.getenv("USERS_DB_PATH") or "").strip()
-    if not path:
-        # default: local app.db next to this file
-        default_path = os.path.abspath(os.path.join(os.getcwd(), "app.db"))
-        return f"sqlite:///{default_path}"
+    # שולף את החלק שאחרי 'sqlite:///' ומחשב אותו יחסית לקובץ הזה
+    rel = raw[len("sqlite:///"):]  # ../backend/Users.db
+    here = Path(__file__).resolve().parent
+    abs_path = (here / rel).resolve()
+    # ודא שהתיקייה קיימת
+    abs_path.parent.mkdir(parents=True, exist_ok=True)
+    # SQLite URL עם נתיב מוחלט
+    return f"sqlite:///{abs_path.as_posix()}"
 
-    # If already a URL (has '://'), return as-is
-    if "://" in path:
-        return path
-
-    # Treat as filesystem path (can be relative)
-    abs_path = os.path.abspath(path)
-    return f"sqlite:///{abs_path}"
-
-USERS_DB_URL = _resolve_users_db_url()
+USERS_DB_URL = _resolve_users_db_url_only_relative_sqlite()
 is_sqlite = USERS_DB_URL.startswith("sqlite:")
 
 engine = create_engine(
@@ -63,7 +61,7 @@ engine = create_engine(
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 meta = MetaData()
 
-# Reflect users table (no schema hardcoding)
+# טבלת users מתוך מסד הנתונים (חייבת כבר להתקיים)
 users = Table("users", meta, autoload_with=engine)
 
 # ================== APP ==================
@@ -71,7 +69,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # TODO: restrict in production
+    allow_origins=["*"],  # הפשטות — הגבל בדפדוף לפרודקשן
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -217,7 +215,7 @@ async def update_user(user_id: int, request: Request, _: str = Depends(require_a
         else:
             clean[k] = v
 
-    # always set updated_at on server side
+    # תמיד נעדכן updated_at בצד שרת
     if "updated_at" in cols:
         clean["updated_at"] = dt.datetime.utcnow()
 
@@ -236,7 +234,6 @@ async def update_user(user_id: int, request: Request, _: str = Depends(require_a
     except HTTPException:
         raise
     except Exception as e:
-        # readable error instead of generic 500
         raise HTTPException(status_code=400, detail=f"Update failed: {type(e).__name__}: {e}")
 
 @app.delete("/api/users/{user_id}")

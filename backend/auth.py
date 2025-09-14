@@ -43,6 +43,7 @@ pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True)
+
     # שדות חובה
     email = Column(String(320), unique=True, index=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
@@ -61,17 +62,19 @@ class User(Base):
     price_nis = Column(Float, nullable=True)
 
     # אפיליאציה
-    affiliateor = Column(String(120), nullable=True)       # מי שהפנה את המשתמש
-    affiliateor_of = Column(String(120), nullable=True)    # את מי המשתמש הפנה
+    # דגל שותף: בוליאני עם ברירת מחדל false
+    affiliator = Column(Boolean, nullable=False, default=False, server_default="0")
+    affiliateor_of = Column(String(120), nullable=True)  # אם אתה משתמש בו, נשאר; אחרת אפשר להסיר
 
     created_at = Column(DateTime, default=dt.datetime.utcnow)
     updated_at = Column(DateTime, default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow)
 
 
+# יצירת טבלאות
 Base.metadata.create_all(bind=UsersEngine)
 
 
-# === מיגרציות (SQLite) — הוספת עמודות אם חסרות ===
+# === מיגרציות (SQLite) — הוספת עמודות אם חסרות (ללא affiliateor השגוי) ===
 def _ensure_column(name: str, col_type: str):
     try:
         with UsersEngine.begin() as conn:
@@ -83,11 +86,10 @@ def _ensure_column(name: str, col_type: str):
     except Exception as e:
         print(f"[AUTH] ensure column {name} failed: {type(e).__name__}: {e}", file=sys.stderr)
 
-
+# עמודות עזר (טקסט/מספר) אם חסרות
 _ensure_column("coupon", "TEXT")
 _ensure_column("price_nis", "REAL")
-_ensure_column("affiliateor", "TEXT")
-_ensure_column("affiliateor_of", "TEXT")
+_ensure_column("affiliateor_of", "TEXT")  # רק אם אתה באמת צריך אותה
 
 
 def get_db():
@@ -140,7 +142,7 @@ class RegisterIn(BaseModel):
     telegram_username: Optional[str] = None
     username: Optional[str] = None
     coupon: Optional[str] = None
-    affiliateor: Optional[str] = None
+    # אין affiliateor (שגוי) ואין affiliator בקלט – ברירת המחדל שלנו היא false
     affiliateor_of: Optional[str] = None
 
 
@@ -227,7 +229,7 @@ def register(
         username=body.username,
         coupon=body.coupon,
         price_nis=final_price,
-        affiliateor=body.affiliateor,
+        affiliator=False,                  # ← ברירת מחדל: לא שותף
         affiliateor_of=body.affiliateor_of,
     )
 
@@ -240,12 +242,11 @@ def register(
     try:
         from zoneinfo import ZoneInfo  # Python 3.9+
         tz_name = os.getenv("TZ_MAIL", "Asia/Jerusalem")
-        # אם נשמר ללא tzinfo נניח שזה UTC
         if expiry_dt.tzinfo is None:
             expiry_dt = expiry_dt.replace(tzinfo=dt.timezone.utc)
         expiry_local = expiry_dt.astimezone(ZoneInfo(tz_name))
     except Exception:
-        expiry_local = expiry_dt  # fallback ללא המרה
+        expiry_local = expiry_dt
 
     active_until_str = expiry_local.strftime("%d.%m.%Y %H:%M")
     # ========================================
@@ -262,9 +263,9 @@ def register(
         "username": user.username,
         "coupon": user.coupon,
         "price_nis": user.price_nis,
-        "affiliateor": user.affiliateor,
+        "affiliator": user.affiliator,
         "affiliateor_of": user.affiliateor_of,
-        "active_until": active_until_str,  # ← נשלח למיילר
+        "active_until": active_until_str,
     }
     background_tasks.add_task(send_on_registration, user_dict, extra_msg)
 
@@ -294,11 +295,6 @@ class PriceOut(BaseModel):
 
 @router.get("/price", response_model=PriceOut)
 def get_price(email: EmailStr = Query(...), db: Session = Depends(get_db)):
-    """
-    מחזיר מחיר בסיס/סופי למשתמש לפי המייל.
-    אם המשתמש קיים עם price_nis/coupon – נחזיר את זה.
-    אם לא – נחזיר מחיר בסיס בלבד.
-    """
     base = BASE_PRICE_NIS
     user = db.execute(select(User).where(User.email == email.lower())).scalar_one_or_none()
     if not user:

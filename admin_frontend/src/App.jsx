@@ -15,49 +15,48 @@ function apiFetch(path, { auth, ...init } = {}) {
 
 // כותרות ידידותיות לעמודות
 const LABELS = {
-   id: 'ID',
-   first_name: 'שם פרטי',
-   last_name: 'שם משפחה',
-   email: 'מייל',
-   telegram_username: 'טלגרם',
-   phone: 'טלפון',
-   approved: 'מאושר',
-   active_until: 'תוקף',
-   created_at: 'נוצר',
-   updated_at: 'עודכן',
-   coupon: 'קופון',
-   price_nis: 'מחיר (₪)',
-   affiliateor: 'Affiliateor',
-   affiliateor_of: 'Affiliateor Of',
- }
+  id: 'ID',
+  first_name: 'שם פרטי',
+  last_name: 'שם משפחה',
+  email: 'מייל',
+  telegram_username: 'טלגרם',
+  phone: 'טלפון',
+  approved: 'מאושר',
+  affiliator: 'שותף',        // ← השדה הנכון
+  active_until: 'תוקף',
+  created_at: 'נוצר',
+  updated_at: 'עודכן',
+  coupon: 'קופון',
+  price_nis: 'מחיר (₪)',
+  affiliateor_of: 'Affiliateor Of',
+}
 
 // עמודות בסיס שיופיעו (אם קיימות במידע)
- const BASE_COLUMNS = [
-   'id',
-   'first_name',
-   'last_name',
-   'email',
-   'telegram_username',
-   'phone',
-   'approved',
-   'active_until',
-   'created_at',
-   'updated_at',
-   'coupon',
-   'price_nis',
-   'affiliateor',
-   'affiliateor_of',
- ]
+const BASE_COLUMNS = [
+  'id',
+  'first_name',
+  'last_name',
+  'email',
+  'telegram_username',
+  'phone',
+  'approved',
+  'active_until',
+  'created_at',
+  'updated_at',
+  'coupon',
+  'price_nis',
+    'affiliator',    // ← כאן
+  'affiliateor_of',
+]
 
 // שדות שלא מציגים בטבלה
-const EXCLUDE = new Set(['password', 'password_hash', 'token'])
+const EXCLUDE = new Set(['password','username', 'password_hash', 'token'])
 
 // שדות שלא מעדכנים לעולם
 const IMMUTABLE = new Set(['id', 'created_at', 'password_hash', 'timestamp'])
 
 function formatDateTime(s) {
   if (!s) return ''
-  // תומך גם ב-"YYYY-MM-DD HH:MM:SS" וגם ב-ISO
   const isoLike = String(s).replace(' ', 'T')
   const d = new Date(isoLike)
   if (isNaN(d.getTime())) return String(s)
@@ -87,7 +86,7 @@ export default function App() {
 
   const [rows, setRows] = useState([])
   const [filter, setFilter] = useState('')
-  const [sorters, setSorters] = useState([]) // [{key, dir:'asc'|'desc'}]
+  const [sorters, setSorters] = useState([])
 
   const [editRowId, setEditRowId] = useState(null)
   const [editDraft, setEditDraft] = useState({})
@@ -135,7 +134,6 @@ export default function App() {
     }
   }
 
-  // בניית רשימת עמודות דינמית: בסיס + כל מפתח נוסף שמופיע בנתונים ואינו בשדות המוחרגים
   const columns = useMemo(() => {
     const set = new Set(BASE_COLUMNS)
     for (const r of rows) {
@@ -216,7 +214,6 @@ export default function App() {
     if (editRowId == null) return
     setErr('')
     try {
-      // מעתיקים ומנקים שדות אסורים
       const payload = { ...editDraft }
       for (const k of Object.keys(payload)) {
         if (IMMUTABLE.has(k) || EXCLUDE.has(k)) delete payload[k]
@@ -231,6 +228,15 @@ export default function App() {
           payload.approved === 'כן'
       }
 
+      // נרמול affiliator -> boolean
+      if ('affiliator' in payload) {
+        payload.affiliator =
+          payload.affiliator === true ||
+          payload.affiliator === '1' ||
+          payload.affiliator === 1 ||
+          payload.affiliator === 'כן'
+      }
+
       // נרמול active_until לפורמט "YYYY-MM-DD HH:MM:SS"
       if ('active_until' in payload && payload.active_until) {
         const v = String(payload.active_until).trim()
@@ -240,12 +246,11 @@ export default function App() {
         }
       }
 
-      // המרה של מחרוזות ריקות ל-NULL בשדות טקסטואליים מסוימים
-      for (const key of ['coupon', 'affiliateor', 'affiliateor_of', 'username', 'telegram_username', 'phone', 'first_name', 'last_name']) {
+      // המרה של מחרוזות ריקות ל-NULL
+      for (const key of ['coupon', 'affiliateor_of', 'username', 'telegram_username', 'phone', 'first_name', 'last_name']) {
         if (key in payload && String(payload[key]).trim() === '') payload[key] = null
       }
 
-      // price_nis: אם ריק – נרשום NULL; אם מספר – נהפוך ל-float
       if ('price_nis' in payload) {
         const v = String(payload.price_nis).trim()
         payload.price_nis = v === '' ? null : Number(v)
@@ -356,97 +361,115 @@ export default function App() {
             </tr>
           </thead>
           <tbody>
-            {sorted.length === 0 ? (
+            { (rows.length === 0) ? (
               <tr><td colSpan={columns.length + 1} className="muted">אין נתונים</td></tr>
-            ) : sorted.map(r => (
-              <tr key={r.id}>
-                {columns.map(key => {
-                  const isEditing = editRowId === r.id
-                  const val = isEditing ? editDraft?.[key] : r?.[key]
+            ) : (
+              (sorted.map(r => {
+                const isEditing = editRowId === r.id
+                return (
+                  <tr key={r.id}>
+                    {columns.map(key => {
+                      const val = isEditing ? editDraft?.[key] : r?.[key]
 
-                  // שדות עם UI מיוחד
-                  if (key === 'approved') {
-                    return (
-                      <td key={key}>
-                        {isEditing ? (
-                          <select
-                            className="cell-input"
-                            value={(val ? '1' : '0')}
-                            onChange={e => changeDraft('approved', e.target.value === '1')}
-                          >
-                            <option value="0">לא</option>
-                            <option value="1">כן</option>
-                          </select>
-                        ) : (r.approved ? 'כן' : 'לא')}
-                      </td>
-                    )
-                  }
-
-                  if (key === 'active_until') {
-                    return (
-                      <td key={key}>
-                        {isEditing ? (
-                          <input
-                            type="datetime-local"
-                            className="cell-input"
-                            value={toDatetimeLocalValue(val)}
-                            onChange={e => changeDraft('active_until', e.target.value)}
-                          />
-                        ) : formatDateTime(r.active_until)}
-                      </td>
-                    )
-                  }
-
-                  if (key === 'price_nis') {
-                    return (
-                      <td key={key}>
-                        {isEditing ? (
-                          <input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            className="cell-input"
-                            value={val ?? ''}
-                            onChange={e => changeDraft('price_nis', e.target.value)}
-                          />
-                        ) : (val == null ? '' : String(val))}
-                      </td>
-                    )
-                  }
-
-                  // ברירת מחדל – לא מאפשרים עריכה לשדות IMMUTABLE
-                  return (
-                    <td key={key}>
-                      {isEditing ? (
-                        IMMUTABLE.has(key) ? (
-                          <span>{String(val ?? '')}</span>
-                        ) : (
-                          <input
-                            className="cell-input"
-                            value={val ?? ''}
-                            onChange={e => changeDraft(key, e.target.value)}
-                          />
+                      if (key === 'approved') {
+                        return (
+                          <td key={key}>
+                            {isEditing ? (
+                              <select
+                                className="cell-input"
+                                value={(val ? '1' : '0')}
+                                onChange={e => changeDraft('approved', e.target.value === '1')}
+                              >
+                                <option value="0">לא</option>
+                                <option value="1">כן</option>
+                              </select>
+                            ) : (r.approved ? 'כן' : 'לא')}
+                          </td>
                         )
-                      ) : String(val ?? '')}
-                    </td>
-                  )
-                })}
+                      }
 
-                <td className="actions">
-                  {editRowId === r.id ? (
-                    <>
-                      <button className="btn-primary sm" onClick={saveEdit}>שמור</button>
-                      <button className="btn-secondary sm" onClick={cancelEdit}>בטל</button>
-                    </>
-                  ) : (
-                    <>
-                      <button className="btn-primary sm" onClick={() => beginEdit(r)}>ערוך</button>
-                      <button className="btn-danger sm" onClick={() => delRow(r.id)}>מחק</button>
-                    </>
-                  )}
-                </td>
-              </tr>
-            ))}
+                      if (key === 'affiliator') {
+                        return (
+                          <td key={key}>
+                            {isEditing ? (
+                              <select
+                                className="cell-input"
+                                value={(val ? '1' : '0')}
+                                onChange={e => changeDraft('affiliator', e.target.value === '1')}
+                              >
+                                <option value="0">לא</option>
+                                <option value="1">כן</option>
+                              </select>
+                            ) : (r.affiliator ? 'כן' : 'לא')}
+                          </td>
+                        )
+                      }
+
+                      if (key === 'active_until') {
+                        return (
+                          <td key={key}>
+                            {isEditing ? (
+                              <input
+                                type="datetime-local"
+                                className="cell-input"
+                                value={toDatetimeLocalValue(val)}
+                                onChange={e => changeDraft('active_until', e.target.value)}
+                              />
+                            ) : formatDateTime(r.active_until)}
+                          </td>
+                        )
+                      }
+
+                      if (key === 'price_nis') {
+                        return (
+                          <td key={key}>
+                            {isEditing ? (
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                className="cell-input"
+                                value={val ?? ''}
+                                onChange={e => changeDraft('price_nis', e.target.value)}
+                              />
+                            ) : (val == null ? '' : String(val))}
+                          </td>
+                        )
+                      }
+
+                      return (
+                        <td key={key}>
+                          {isEditing ? (
+                            IMMUTABLE.has(key) ? (
+                              <span>{String(val ?? '')}</span>
+                            ) : (
+                              <input
+                                className="cell-input"
+                                value={val ?? ''}
+                                onChange={e => changeDraft(key, e.target.value)}
+                              />
+                            )
+                          ) : String(val ?? '')}
+                        </td>
+                      )
+                    })}
+                    <td className="actions">
+                      {isEditing ? (
+                        <>
+                          <button className="btn-primary sm" onClick={saveEdit}>שמור</button>
+                          <button className="btn-secondary sm" onClick={cancelEdit}>בטל</button>
+                        </>
+                      ) : (
+                        <>
+                          <button className="btn-primary sm" onClick={() => beginEdit(r)}>ערוך</button>
+                          <button className="btn-danger sm" onClick={() => delRow(r.id)}>מחק</button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                )
+              }))
+            )}
           </tbody>
         </table>
       </div>
