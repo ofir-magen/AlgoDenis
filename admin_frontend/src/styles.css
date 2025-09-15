@@ -53,9 +53,7 @@ body{
   z-index:1;
   backdrop-filter: blur(10px);
 }
-.brand{
-  text-align:center; margin-bottom:6px;
-}
+.brand{ text-align:center; margin-bottom:6px; }
 .logo-dot{
   width:18px; height:18px; margin:0 auto 6px;
   border-radius:6px;
@@ -115,6 +113,7 @@ label{font-size:13px; color:var(--txt-dim); margin-top:8px}
   padding: 0 16px 40px;
 }
 
+/* Top bar (עם ניווט באמצע) */
 .topbar{
   display:flex; align-items:center; justify-content:space-between;
   gap:12px; margin-bottom:14px;
@@ -122,24 +121,36 @@ label{font-size:13px; color:var(--txt-dim); margin-top:8px}
   background: rgba(10,14,30,.45);
   border:1px solid var(--stroke); border-radius:14px;
   backdrop-filter: blur(8px);
+  z-index: 50; /* שיישאר מעל הכותרת של הטבלה */
 }
-.topbar .left{display:flex; align-items:center; gap:10px}
+.topbar .left,
 .topbar .right{display:flex; align-items:center; gap:10px}
+.topbar .middle{
+  display:flex; gap:8px; justify-content:center; flex:1;
+}
 
+/* Buttons */
 .btn-secondary, .btn-outline{
   border-radius:10px; padding:10px 12px; cursor:pointer;
-  font-weight:600;
+  font-weight:600; text-decoration:none; display:inline-flex; align-items:center;
 }
 .btn-secondary{
   background: rgba(255,255,255,.08);
   border:1px solid var(--stroke);
   color:var(--txt);
 }
+.btn-secondary:hover{ background: rgba(255,255,255,.12); }
+.btn-secondary:focus-visible{ outline:2px solid rgba(110,162,255,.45); outline-offset: 1px; }
+.btn-secondary.active{ outline:2px solid rgba(124, 242, 214, 0.8); }
+
 .btn-outline{
   background: transparent;
   border:1px solid var(--accent1);
   color:var(--accent1);
 }
+.btn-outline:hover{ background: rgba(110,162,255,.12); }
+
+/* Pills / counters */
 .pill{
   padding:6px 10px; border-radius:999px;
   background: rgba(255,255,255,.08);
@@ -147,6 +158,8 @@ label{font-size:13px; color:var(--txt-dim); margin-top:8px}
   color:var(--txt-dim);
   font-size:13px;
 }
+
+/* Search */
 .search{
   min-width:300px;
   border:1px solid var(--stroke);
@@ -156,7 +169,10 @@ label{font-size:13px; color:var(--txt-dim); margin-top:8px}
   padding:10px 12px;
   outline:none;
 }
+.search:focus{ border-color: var(--accent1); box-shadow:0 0 0 3px rgba(110,162,255,.18); }
+.search:disabled{ opacity:.6; cursor:not-allowed }
 
+/* Table */
 .table-wrap{
   margin-top:14px;
   border:1px solid var(--stroke);
@@ -209,6 +225,8 @@ table.users{
 }
 .btn-secondary.sm{ background: rgba(255,255,255,.08); border:1px solid var(--stroke); color:var(--txt) }
 .btn-danger.sm{ background: rgba(255,80,80,.15); border:1px solid rgba(255,80,80,.35); color:#ffb9bf }
+
+/* Top buttons (legacy) */
 .topbtn {
   padding: 6px 12px;
   border-radius: 10px;
@@ -218,9 +236,21 @@ table.users{
   text-decoration: none;
   font-size: 14px;
 }
-.topbtn:hover {
-  background: rgba(255,255,255,0.12);
+.topbtn:hover { background: rgba(255,255,255,0.12); }
+.topbtn.active { outline: 2px solid rgba(124, 242, 214, 0.8); }
+
+/* ===== Settings page helpers ===== */
+.settings-form label{
+  display:block; margin:8px 0 6px; font-size:13px; color:var(--txt-dim);
 }
-.topbtn.active {
-  outline: 2px solid rgba(124, 242, 214, 0.8);
+.settings-form .input{
+  margin-bottom:8px;
+}
+
+/* ===== Responsive tweaks ===== */
+@media (max-width: 720px){
+  .search{ min-width: 0; width: 48vw; }
+  .topbar{ flex-wrap: wrap; gap: 8px; }
+  .topbar .middle{ order: 3; width: 100%; justify-content: center; }
+  .topbar .left, .topbar .right{ flex: 1 1 auto; justify-content: space-between; }
 }
