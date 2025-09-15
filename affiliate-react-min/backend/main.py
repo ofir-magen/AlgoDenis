@@ -1,20 +1,27 @@
 # backend/main.py
-# FastAPI (email+password) auth against existing SQLite Users DB.
-# .env (backend/.env מועדף; אחרת .env בשורש):
-#   USERS_DB_PATH=sqlite:///../backend/Users.db   # או file:///abs/path.db
+# FastAPI auth + affiliate dashboard (SQLite).
+# Environment (backend/.env preferred; else nearest .env):
+#   USERS_DB_PATH=sqlite:///../backend/Users.db
 #   USERS_TABLE=users
 #   EMAIL_COL=email
 #   PASSWORD_HASH_COL=password_hash
-#   ACTIVE_COL=approved   # ברירת מחדל כאן היא approved
-#   HASH_SCHEME=bcrypt    # או plain
+#   ACTIVE_COL=approved
+#   HASH_SCHEME=bcrypt
 #   FRONTEND_ORIGINS=http://localhost:5180,http://127.0.0.1:5180
 #   SECRET_KEY=change-me
 #   API_PORT=8020
+#
+#   # Coupons DB (now with `coupon` column name):
+#   COUPONS_DB_PATH=sqlite:///../backend/DiscountCoupon.db
+#   COUPONS_TABLE=coupons
+#   COUPON_CODE_COL=coupon
+#   PARTNER_EMAIL_COL=affiliator_mail
+#   USERS_COUPON_COL=coupon
 
 import os
 import sqlite3
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List
 from pathlib import Path
 
 from fastapi import Header
@@ -46,11 +53,11 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "4320
 FRONTEND_ORIGINS = [o.strip() for o in os.getenv("FRONTEND_ORIGINS", "http://localhost:5180").split(",") if o.strip()]
 API_PORT    = int(os.getenv("API_PORT", "8020"))
 
-USERS_DB_URI       = os.getenv("USERS_DB_PATH", "sqlite:///./Users.db")  # MUST start with sqlite:/// or file://
+USERS_DB_URI       = os.getenv("USERS_DB_PATH", "sqlite:///./Users.db")
 USERS_TABLE        = os.getenv("USERS_TABLE", "users")
 EMAIL_COL          = os.getenv("EMAIL_COL", os.getenv("USERNAME_COL", "email"))
 PASSWORD_HASH_COL  = os.getenv("PASSWORD_HASH_COL", "password_hash")
-ACTIVE_COL         = os.getenv("ACTIVE_COL", "approved")  # <— ברירת מחדל approved
+ACTIVE_COL         = os.getenv("ACTIVE_COL", "approved")
 HASH_SCHEME        = os.getenv("HASH_SCHEME", "bcrypt").lower()  # bcrypt | plain
 
 def _normalize_db_uri_to_path(uri: str) -> str:
@@ -59,10 +66,7 @@ def _normalize_db_uri_to_path(uri: str) -> str:
     elif uri.startswith("file://"):
         raw = uri[len("file://"):]
     else:
-        raise RuntimeError(
-            "USERS_DB_PATH must start with 'sqlite:///' or 'file://'. "
-            f"Got: {uri!r}"
-        )
+        raise RuntimeError("USERS_DB_PATH/COUPONS_DB_PATH must start with sqlite:/// or file://")
     p = Path(raw)
     if not p.is_absolute():
         p = (ENV_DIR / p).resolve()
@@ -70,8 +74,16 @@ def _normalize_db_uri_to_path(uri: str) -> str:
 
 USERS_DB_PATH = _normalize_db_uri_to_path(USERS_DB_URI)
 
+# ---- Affiliate/Coupons settings ----
+COUPONS_DB_URI      = os.getenv("COUPONS_DB_PATH", USERS_DB_URI)  # default: same DB as users unless set
+COUPONS_TABLE       = os.getenv("COUPONS_TABLE", "coupons")
+COUPON_CODE_COL     = os.getenv("COUPON_CODE_COL", "coupon")          # <-- you renamed this
+PARTNER_EMAIL_COL   = os.getenv("PARTNER_EMAIL_COL", "affiliator_mail")
+USERS_COUPON_COL    = os.getenv("USERS_COUPON_COL", "coupon")
+COUPONS_DB_PATH     = _normalize_db_uri_to_path(COUPONS_DB_URI)
+
 # ---------- App ----------
-app = FastAPI(title="Affiliates API (email login, approved flag)")
+app = FastAPI(title="Affiliates API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=FRONTEND_ORIGINS,
@@ -94,25 +106,19 @@ class DashboardData(BaseModel):
 
 # ---------- Helpers ----------
 def _is_active_value(v) -> bool:
-    """Interpret ACTIVE_COL value. Flexible for ints/strings/booleans."""
     if v is None:
         return False
     s = str(v).strip().lower()
-
     inactive = {"0", "false", "pending", "disabled", "inactive", ""}
     active   = {"1", "true", "approved", "yes", "enabled", "active"}
-
     if s in active:
         return True
     if s in inactive:
         return False
-
-    # Fallback: treat any non-empty, non-zero-ish value as active
     try:
-        # if it's numeric string like "2" → consider active
         return float(s) != 0.0
     except Exception:
-        return True  # any other non-empty string → active
+        return True
 
 def _verify_password(plain: str, stored_hash: str) -> bool:
     if HASH_SCHEME == "bcrypt":
@@ -128,14 +134,11 @@ def _verify_password(plain: str, stored_hash: str) -> bool:
 def verify_user(email: str, password: str) -> bool:
     if not os.path.exists(USERS_DB_PATH):
         raise HTTPException(status_code=500, detail="Users DB not found. Check USERS_DB_PATH in .env")
-
-    # Build query (include ACTIVE_COL if defined)
     q = f"SELECT {PASSWORD_HASH_COL}"
     include_active = bool(ACTIVE_COL)
     if include_active:
         q += f", {ACTIVE_COL}"
     q += f" FROM {USERS_TABLE} WHERE {EMAIL_COL} = ? LIMIT 1"
-
     try:
         con = sqlite3.connect(USERS_DB_PATH)
         cur = con.cursor()
@@ -144,21 +147,16 @@ def verify_user(email: str, password: str) -> bool:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DB error: {e}")
     finally:
-        try:
-            con.close()
-        except Exception:
-            pass
-
+        try: con.close()
+        except Exception: pass
     if not row:
         return False
-
     if include_active:
         pwd_hash, active_val = row[0], row[1]
         if not _is_active_value(active_val):
             return False
     else:
         pwd_hash = row[0]
-
     return _verify_password(password, pwd_hash)
 
 def create_access_token(subject: str, minutes: int = ACCESS_TOKEN_EXPIRE_MINUTES) -> str:
@@ -181,20 +179,80 @@ def bearer_from_header(authorization: Optional[str]) -> str:
         raise HTTPException(status_code=401, detail="Missing bearer token")
     return authorization.split(" ", 1)[1].strip()
 
-# ---------- Routes ----------
-@app.get("/me", response_model=UserOut)
-def me(authorization: Optional[str] = Header(None)):
-    email = decode_access_token(bearer_from_header(authorization))
-    return UserOut(email=email)
+def _fetchall_dicts(con, query: str, params: tuple = ()):
+    cur = con.cursor()
+    cur.execute(query, params)
+    cols = [c[0] for c in cur.description]
+    rows = cur.fetchall()
+    return [dict(zip(cols, r)) for r in rows]
 
-@app.get("/dashboard/data", response_model=DashboardData)
-def dashboard_data(authorization: Optional[str] = Header(None)):
-    email = decode_access_token(bearer_from_header(authorization))
-    return DashboardData(message="מחובר!", user=UserOut(email=email))
+def _get_users_table_columns() -> List[str]:
+    """Return users table column names to always render headers on FE."""
+    if not os.path.exists(USERS_DB_PATH):
+        return []
+    try:
+        con = sqlite3.connect(USERS_DB_PATH)
+        cur = con.cursor()
+        cur.execute(f"PRAGMA table_info({USERS_TABLE})")
+        rows = cur.fetchall()  # (cid, name, type, notnull, dflt_value, pk)
+        cols = [r[1] for r in rows]
+    except Exception:
+        cols = []
+    finally:
+        try: con.close()
+        except Exception: pass
+    return cols
+
+def _get_all_coupons() -> List[str]:
+    """Return ALL coupon codes in system (for terminal print)."""
+    if not os.path.exists(COUPONS_DB_PATH):
+        print(f"[WARN] Coupons DB not found at {COUPONS_DB_PATH}")
+        return []
+    try:
+        con = sqlite3.connect(COUPONS_DB_PATH)
+        cur = con.cursor()
+        x = f"SELECT {COUPON_CODE_COL} FROM {COUPONS_TABLE}"
+        print("xxxxxxxxxxxxx ",x)
+        cur.execute(f"SELECT {COUPON_CODE_COL} FROM {COUPONS_TABLE}")
+        rows = cur.fetchall()
+        coupons = [str(r[0]).strip() for r in rows if r and r[0] is not None and str(r[0]).strip()]
+        coupons = sorted(set(coupons))
+        return coupons
+    except Exception as e:
+        print(f"[ERROR] _get_all_coupons failed: {e}")
+        return []
+    finally:
+        try: con.close()
+        except Exception: pass
+
+def _get_partner_coupons(partner_email: str) -> List[str]:
+    """Return coupons that belong to this partner (by PARTNER_EMAIL_COL)."""
+    if not partner_email or not os.path.exists(COUPONS_DB_PATH):
+        return []
+    try:
+        con = sqlite3.connect(COUPONS_DB_PATH)
+        cur = con.cursor()
+        cur.execute(
+            f"SELECT {COUPON_CODE_COL} FROM {COUPONS_TABLE} WHERE {PARTNER_EMAIL_COL} = ?",
+            (partner_email,)
+        )
+        rows = cur.fetchall()
+        coupons = [str(r[0]).strip() for r in rows if r and r[0] is not None and str(r[0]).strip()]
+        return sorted(set(coupons))
+    except Exception as e:
+        print(f"[ERROR] _get_partner_coupons failed: {e}")
+        return []
+    finally:
+        try: con.close()
+        except Exception: pass
+
+# ---------- Routes ----------
+@app.get("/health")
+def health():
+    return {"ok": True, "time": datetime.utcnow().isoformat()}
 
 @app.post("/login", response_model=Token)
 def login(form: OAuth2PasswordRequestForm = Depends()):
-    # form.username מכיל את *האימייל* (שם השדה נשאר username לפי התקן)
     email = form.username
     password = form.password
     if not email or not password:
@@ -205,11 +263,60 @@ def login(form: OAuth2PasswordRequestForm = Depends()):
     return Token(access_token=token)
 
 @app.get("/me", response_model=UserOut)
-def me(authorization: Optional[str] = None):
+def me(authorization: Optional[str] = Header(None)):
     email = decode_access_token(bearer_from_header(authorization))
     return UserOut(email=email)
 
 @app.get("/dashboard/data", response_model=DashboardData)
-def dashboard_data(authorization: Optional[str] = None):
+def dashboard_data(authorization: Optional[str] = Header(None)):
     email = decode_access_token(bearer_from_header(authorization))
     return DashboardData(message="מחובר!", user=UserOut(email=email))
+
+@app.get("/dashboard/aff-users")
+def dashboard_aff_users(authorization: Optional[str] = Header(None)):
+    """
+    Returns:
+      - partner_email: str
+      - coupons: list[str] that belong to this partner
+      - columns: list[str] = all users table columns (for headers even when empty)
+      - users: list[dict] = all users whose USERS_COUPON_COL is in partner coupons
+    Also prints ALL coupons in system to terminal on each call.
+    """
+    partner_email = decode_access_token(bearer_from_header(authorization))
+    print("ofir_partner_email: ",partner_email)
+    columns = _get_users_table_columns()
+
+    # 1) Print ALL coupons (your request)
+    all_coupons = _get_all_coupons()
+    print(f"[INFO] ALL coupons in system ({len(all_coupons)}): {all_coupons}")
+
+    # 2) Coupons for this partner
+    coupons = _get_partner_coupons(partner_email)
+    print(f"[DEBUG] Partner {partner_email} coupons ({len(coupons)}): {coupons}")
+
+    if not coupons:
+        return {
+            "partner_email": partner_email,
+            "coupons": [],
+            "columns": columns,
+            "users": [],
+        }
+
+    placeholders = ",".join("?" for _ in coupons)
+    q = f"SELECT * FROM {USERS_TABLE} WHERE {USERS_COUPON_COL} IN ({placeholders})"
+    try:
+        con = sqlite3.connect(USERS_DB_PATH)
+        users = _fetchall_dicts(con, q, tuple(coupons))
+    except Exception as e:
+        print(f"[ERROR] Query users by coupons failed: {e}")
+        users = []
+    finally:
+        try: con.close()
+        except Exception: pass
+
+    return {
+        "partner_email": partner_email,
+        "coupons": coupons,
+        "columns": columns,
+        "users": users,
+    }
