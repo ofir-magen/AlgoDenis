@@ -1,4 +1,5 @@
 # admin_backend/app.py
+import json
 import os
 import datetime as dt
 from pathlib import Path
@@ -25,6 +26,45 @@ ADMIN_PASS = os.getenv("ADMIN_PASS", "admin")
 JWT_SECRET = os.getenv("ADMIN_JWT_SECRET", "CHANGE_ME")
 JWT_ALG = "HS256"
 JWT_EXPIRE_MIN = int(os.getenv("ADMIN_JWT_EXPIRE_MIN", "240"))
+SETTINGS_FILE_PATH = os.getenv("SETTINGS_FILE_PATH", "CHANGE_ME")
+print("ofir_SETTINGS_FILE_PATH: ",SETTINGS_FILE_PATH)
+
+
+
+# ================== Setting Json get/set (נתונים) ==================
+
+def getJsonData():
+    """קוראת את קובץ ה-JSON, זורקת שגיאה אם אין גישה או שיש קובץ פגום"""
+    if not os.path.exists(SETTINGS_FILE_PATH):
+        raise FileNotFoundError(f"JSON file not found at {SETTINGS_FILE_PATH}")
+    try:
+        with open(SETTINGS_FILE_PATH, "r") as f:
+            return json.load(f)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Failed to parse JSON file: {e}")
+    except Exception as e:
+        raise RuntimeError(f"Unexpected error reading JSON: {e}")
+
+def setJsonData(data: dict):
+    """שומרת נתונים בקובץ JSON, זורקת שגיאה אם משהו משתבש"""
+    try:
+        with open(SETTINGS_FILE_PATH, "w") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        raise RuntimeError(f"Failed to write JSON file: {e}")
+
+
+print("start")
+try:
+    settings = getJsonData()
+    print(settings)
+    settings["x"] = 99
+    setJsonData(settings)
+except Exception as e:
+    print(f"Error: {e}")
+print("end")
+
+
 
 # ================== Users DB (צורה יחידה!) ==================
 def _resolve_users_db_url_only_relative_sqlite() -> str:
