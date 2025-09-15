@@ -27,18 +27,25 @@ JWT_SECRET = os.getenv("ADMIN_JWT_SECRET", "CHANGE_ME")
 JWT_ALG = "HS256"
 JWT_EXPIRE_MIN = int(os.getenv("ADMIN_JWT_EXPIRE_MIN", "240"))
 SETTINGS_FILE_PATH = os.getenv("SETTINGS_FILE_PATH", "CHANGE_ME")
-print("ofir_SETTINGS_FILE_PATH: ",SETTINGS_FILE_PATH)
-
-
+print("ofir_SETTINGS_FILE_PATH: ", SETTINGS_FILE_PATH)
 
 # ================== Setting Json get/set (נתונים) ==================
 
+def _resolve_settings_path() -> str:
+    """
+    פותר את SETTINGS_FILE_PATH כנתיב מוחלט יחסית למיקום של הקובץ הזה (app.py),
+    כדי שההרצה לא תהיה תלויה בתקיית ה-Working Directory.
+    """
+    base_dir = Path(__file__).resolve().parent
+    return str((base_dir / SETTINGS_FILE_PATH).resolve())
+
 def getJsonData():
     """קוראת את קובץ ה-JSON, זורקת שגיאה אם אין גישה או שיש קובץ פגום"""
-    if not os.path.exists(SETTINGS_FILE_PATH):
-        raise FileNotFoundError(f"JSON file not found at {SETTINGS_FILE_PATH}")
+    path = _resolve_settings_path()
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"JSON file not found at {path}")
     try:
-        with open(SETTINGS_FILE_PATH, "r") as f:
+        with open(path, "r") as f:
             return json.load(f)
     except json.JSONDecodeError as e:
         raise ValueError(f"Failed to parse JSON file: {e}")
@@ -47,24 +54,16 @@ def getJsonData():
 
 def setJsonData(data: dict):
     """שומרת נתונים בקובץ JSON, זורקת שגיאה אם משהו משתבש"""
+    path = _resolve_settings_path()
     try:
-        with open(SETTINGS_FILE_PATH, "w") as f:
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, path)
     except Exception as e:
         raise RuntimeError(f"Failed to write JSON file: {e}")
 
-
-print("start")
-try:
-    settings = getJsonData()
-    print(settings)
-    settings["x"] = 99
-    setJsonData(settings)
-except Exception as e:
-    print(f"Error: {e}")
-print("end")
-
-
+# (הוסר בלוק בדיקות עם הדפסות ושינוי x=99 כדי למנוע תופעות לוואי)
 
 # ================== Users DB (צורה יחידה!) ==================
 def _resolve_users_db_url_only_relative_sqlite() -> str:
@@ -217,6 +216,44 @@ def login(body: LoginIn):
     if body.username != ADMIN_USER or body.password != ADMIN_PASS:
         raise HTTPException(status_code=401, detail="Bad credentials")
     return {"token": create_token(body.username)}
+
+# -------- Settings endpoints (new) --------
+@app.get("/api/settings")
+def get_settings(_: str = Depends(require_auth)):
+    try:
+        data = getJsonData()
+        # נוודא שדות בסיס ונהפוך למספרים
+        x = int(data.get("x"))
+        y = int(data.get("y"))
+        return {"x": x, "y": y}
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid settings: x/y must be integers")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read settings: {e}")
+
+@app.patch("/api/settings")
+async def patch_settings(request: Request, _: str = Depends(require_auth)):
+    try:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="Body must be JSON object")
+
+        cur = getJsonData()
+        if "x" in payload:
+            cur["x"] = int(payload["x"])
+        if "y" in payload:
+            cur["y"] = int(payload["y"])
+
+        # כתיבה ושיבה
+        setJsonData(cur)
+        return {"x": int(cur["x"]), "y": int(cur["y"])}
+    except HTTPException:
+        raise
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid payload: x/y must be integers")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update settings: {e}")
+# ------------------------------------------
 
 @app.get("/api/users")
 def list_users(_: str = Depends(require_auth)):

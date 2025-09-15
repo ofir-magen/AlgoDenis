@@ -22,7 +22,7 @@ const LABELS = {
   telegram_username: 'טלגרם',
   phone: 'טלפון',
   approved: 'מאושר',
-  affiliator: 'שותף',        // ← השדה הנכון
+  affiliator: 'שותף',
   active_until: 'תוקף',
   created_at: 'נוצר',
   updated_at: 'עודכן',
@@ -45,7 +45,7 @@ const BASE_COLUMNS = [
   'updated_at',
   'coupon',
   'price_nis',
-    'affiliator',    // ← כאן
+  'affiliator',
   'affiliateor_of',
 ]
 
@@ -84,12 +84,20 @@ export default function App() {
   const [err, setErr] = useState('')
   const [loading, setLoading] = useState(false)
 
+  // 탭ים: users | logs | settings
+  const [tab, setTab] = useState('users')
+
   const [rows, setRows] = useState([])
   const [filter, setFilter] = useState('')
   const [sorters, setSorters] = useState([])
 
   const [editRowId, setEditRowId] = useState(null)
   const [editDraft, setEditDraft] = useState({})
+
+  // Settings state
+  const [settings, setSettings] = useState({ x: '', y: '' })
+  const [settingsLoading, setSettingsLoading] = useState(false)
+  const [settingsMsg, setSettingsMsg] = useState('')
 
   async function login(e) {
     e.preventDefault()
@@ -282,7 +290,53 @@ export default function App() {
     }
   }
 
-  useEffect(() => { if (auth) load() }, [auth])
+  // טענת משתמשים אחרי התחברות
+  useEffect(() => { if (auth && tab === 'users') load() }, [auth, tab])
+
+  // ===== Settings handlers =====
+  async function fetchSettings() {
+    setSettingsLoading(true)
+    setSettingsMsg('')
+    try {
+      const res = await apiFetch('/settings', { auth })
+      if (!res.ok) throw new Error(await res.text())
+      const data = await res.json()
+      setSettings({ x: data.x, y: data.y })
+    } catch (e) {
+      setSettingsMsg(String(e.message || e))
+    } finally {
+      setSettingsLoading(false)
+    }
+  }
+
+  async function saveSettings() {
+    setSettingsMsg('')
+    const payload = { x: Number(settings.x), y: Number(settings.y) }
+    if (Number.isNaN(payload.x) || Number.isNaN(payload.y)) {
+      setSettingsMsg('x ו-y חייבים להיות מספרים')
+      return
+    }
+    try {
+      const res = await apiFetch('/settings', {
+        method: 'PATCH',
+        auth,
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) throw new Error(await res.text())
+      const data = await res.json()
+      setSettings({ x: data.x, y: data.y })
+      setSettingsMsg('הגדרות נשמרו')
+    } catch (e) {
+      setSettingsMsg(String(e.message || e))
+    }
+  }
+
+  // טען הגדרות כשעוברים לטאב "הגדרות"
+  useEffect(() => {
+    if (auth && tab === 'settings') {
+      fetchSettings()
+    }
+  }, [auth, tab])
 
   // ====== UI ======
   if (!auth) {
@@ -332,14 +386,42 @@ export default function App() {
     <div className="admin-shell">
       <header className="topbar">
         <div className="left">
-          <button className="btn-secondary" onClick={load}>רענן</button>
+          <button className="btn-secondary" onClick={() => {
+            if (tab === 'users') load()
+            if (tab === 'settings') fetchSettings()
+          }}>רענן</button>
+
           <input
             className="search"
             placeholder="חיפוש בכל השדות…"
             value={filter}
             onChange={e => setFilter(e.target.value)}
+            disabled={tab !== 'users'}
           />
         </div>
+
+        {/* --- ניווט באמצע: משתמשים / לוגים / הגדרות --- */}
+        <div className="middle" style={{ display: 'flex', gap: 8 }}>
+          <button
+            className={`btn-secondary ${tab === 'users' ? 'active' : ''}`}
+            onClick={() => setTab('users')}
+          >
+            משתמשים
+          </button>
+          <button
+            className={`btn-secondary ${tab === 'logs' ? 'active' : ''}`}
+            onClick={() => setTab('logs')}
+          >
+            לוגים
+          </button>
+          <button
+            className={`btn-secondary ${tab === 'settings' ? 'active' : ''}`}
+            onClick={() => setTab('settings')}
+          >
+            הגדרות
+          </button>
+        </div>
+
         <div className="right">
           <span className="pill">סה״כ: {rows.length}</span>
           <button className="btn-outline" onClick={logout}>התנתק</button>
@@ -348,23 +430,25 @@ export default function App() {
 
       {err ? <div className="alert" style={{ margin: '12px auto' }}>{err}</div> : null}
 
-      <div className="table-wrap">
-        <table className="users">
-          <thead>
-            <tr>
-              {columns.map(key => (
-                <th key={key} onClick={() => toggleSort(key)}>
-                  {LABELS[key] || key}{sorterIndicator(key)}
-                </th>
-              ))}
-              <th>פעולות</th>
-            </tr>
-          </thead>
-          <tbody>
-            { (rows.length === 0) ? (
+      {/* תוכן לפי טאב */}
+      {tab === 'users' && (
+        <div className="table-wrap">
+          <table className="users">
+            <thead>
+              <tr>
+                {columns.map(key => (
+                  <th key={key} onClick={() => toggleSort(key)}>
+                    {LABELS[key] || key}{sorterIndicator(key)}
+                  </th>
+                ))}
+                <th>פעולות</th>
+              </tr>
+            </thead>
+            <tbody>
+            {(rows.length === 0) ? (
               <tr><td colSpan={columns.length + 1} className="muted">אין נתונים</td></tr>
             ) : (
-              (sorted.map(r => {
+              sorted.map(r => {
                 const isEditing = editRowId === r.id
                 return (
                   <tr key={r.id}>
@@ -468,11 +552,50 @@ export default function App() {
                     </td>
                   </tr>
                 )
-              }))
+              })
             )}
-          </tbody>
-        </table>
-      </div>
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {tab === 'logs' && (
+        <div style={{ padding: 16 }}>
+          דף לוגים — נבנה בהמשך
+        </div>
+      )}
+
+      {tab === 'settings' && (
+        <div style={{ padding: 16, maxWidth: 420 }}>
+          <h2>הגדרות</h2>
+          {settingsLoading ? <div>טוען…</div> : null}
+          {settingsMsg ? <div className="alert" style={{ margin: '8px 0' }}>{settingsMsg}</div> : null}
+
+          <label style={{ display: 'block', marginBottom: 8 }}>
+            x:
+            <input
+              type="number"
+              className="input"
+              value={settings.x}
+              onChange={e => setSettings(s => ({ ...s, x: e.target.value }))}
+              style={{ marginInlineStart: 8 }}
+            />
+          </label>
+
+          <label style={{ display: 'block', marginBottom: 8 }}>
+            y:
+            <input
+              type="number"
+              className="input"
+              value={settings.y}
+              onChange={e => setSettings(s => ({ ...s, y: e.target.value }))}
+              style={{ marginInlineStart: 8 }}
+            />
+          </label>
+
+          <button className="btn-primary" onClick={saveSettings}>שמור</button>
+        </div>
+      )}
     </div>
   )
 }
