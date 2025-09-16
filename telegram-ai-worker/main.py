@@ -1,4 +1,3 @@
-# main.py
 import os
 import sys
 import asyncio
@@ -10,53 +9,59 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from ai import ask_with_sources
 from telegram_listener import TelegramListener, TelegramMessenger
+from log_utils import build_logger
 
 # ========= ENV =========
 load_dotenv()
+logger = build_logger("main")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 SOURCE_CHANNEL_ID = int(os.getenv("SOURCE_CHANNEL_ID", "0"))
 TARGET_GROUP_ID = int(os.getenv("TARGET_GROUP_ID", "0"))
-USERS_GROUP_CHAT = int(os.getenv("UsersGroupChat", "0"))  # לערוץ/קבוצה שמקבלת סיכום בלחיצה
+USERS_GROUP_CHAT = int(os.getenv("UsersGroupChat", "0"))  # group/channel for user summary on click
 RETRY_DELAY_SECONDS = float(os.getenv("TG_RETRY_DELAY", "15"))
 
 if not BOT_TOKEN or not SOURCE_CHANNEL_ID or not TARGET_GROUP_ID:
-    print("[BOOT] חסרים BOT_TOKEN / SOURCE_CHANNEL_ID / TARGET_GROUP_ID ב-.env", file=sys.stderr)
+    logger.error("Missing BOT_TOKEN / SOURCE_CHANNEL_ID / TARGET_GROUP_ID in .env")
 
-# שליח לטלגרם (קבוצה יעד)
+# Global messenger to Telegram (target group)
 messenger: Optional[TelegramMessenger] = None
 
-# ========= לוגיקת עיבוד =========
+# ========= Processing Logic =========
 async def process_urls(urls: List[str], question_text: str = "", link_text: str = "", matrix_text: str = ""):
     """
-    נקראת ע״י TelegramListener כשהיא מזהה פוסט עם קישורים.
-    urls        - כל הקישורים חוץ מהראשון (כמו בקוד שלך)
-    question_text - הטקסט לאחר ניקוי קישורים/תוויות
-    link_text   - הקישור הראשון (להצגה)
-    matrix_text - מטריצה שזוהתה (לא נשלחת ל-GPT)
+    Called by TelegramListener when a post with links is detected.
+    urls         - all links except the first one (as in your code)
+    question_text - text after removing links/labels
+    link_text    - the first link (for display)
+    matrix_text  - detected matrix (not sent to GPT)
     """
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    logger.info(f"process_urls invoked with {len(urls)} URLs; link_text='{link_text}'")
+
     if not urls:
         err = "No URLs provided from Telegram message."
-        print(f"[worker] {ts} - {err}", file=sys.stderr)
-        # שליחת הודעת שגיאה עם כפתורים (אופציונלי)
+        logger.error(err)
         if messenger:
             parts = ["שגיאה בעיבוד הודעה מהטלגרם:", err]
             if matrix_text:
                 parts += ["", "מטריצה:", matrix_text]
-            await messenger.send_text_with_button("\n".join(parts))
+            try:
+                await messenger.send_text_with_button("\n".join(parts))
+            except Exception as e:
+                logger.exception(f"Failed sending error message to Telegram: {e}")
         return
 
+    # Call GPT worker
     try:
-        print(f"[worker] {ts} - שולח ל-GPT עם {len(urls)} קישורים…")
-        # שים לב: ai.py המקורי טוען PROMPT/QUESTION מה-.env ומתעלם מארגומנטים
+        logger.info(f"Sending {len(urls)} URLs to GPT…")
         answer = await asyncio.to_thread(ask_with_sources, None, None, urls)
-        print(f"[worker] {ts} - קיבלתי תשובה מ-GPT")
+        logger.info("Received answer from GPT.")
     except Exception as e:
         answer = f"AI processing failed: {e}"
-        print(f"[worker] {ts} - {answer}", file=sys.stderr)
+        logger.exception(f"ask_with_sources failed: {e}")
 
-    # בניית טקסט מלא לטלגרם
+    # Build final text for Telegram
     msg_parts = [
         "כותרת ההודעה:",
         (question_text or "(ללא כותרת)").strip(),
@@ -71,60 +76,64 @@ async def process_urls(urls: List[str], question_text: str = "", link_text: str 
         msg_parts += ["", "מטריצה:", matrix_text.strip()]
     full_text = "\n".join(msg_parts)
 
-    # שליחה לקבוצת היעד עם כפתורים
+    # Send to target group with buttons
     if messenger:
         try:
             await messenger.send_text_with_button(full_text)
-            print("[worker] נשלח לטלגרם ✓")
+            logger.info("Message sent to Telegram target group successfully.")
         except Exception as e:
-            print(f"[TG] שגיאה בשליחה לקבוצה: {e}", file=sys.stderr)
+            logger.exception(f"Error sending message to Telegram group: {e}")
 
-
-# ========= אתחול והפעלת המאזין =========
+# ========= Init and run the listener =========
 async def amain():
     global messenger
 
     loop = asyncio.get_running_loop()
+    logger.info("Starting amain()")
 
-    # הכנת שליח לקבוצת היעד
     if BOT_TOKEN and TARGET_GROUP_ID:
         messenger = TelegramMessenger(BOT_TOKEN, TARGET_GROUP_ID)
-        print(f"[TG] TelegramMessenger מוכן לקבוצה {TARGET_GROUP_ID}")
+        logger.info(f"TelegramMessenger ready for group {TARGET_GROUP_ID}")
     else:
-        print("[TG] TelegramMessenger לא הופעל (BOT_TOKEN/TARGET_GROUP_ID חסרים)")
+        logger.warning("TelegramMessenger not started (missing BOT_TOKEN/TARGET_GROUP_ID)")
 
     if not BOT_TOKEN:
-        print("[TG] לא הוגדר BOT_TOKEN ב-.env — המאזין לא יופעל.", file=sys.stderr)
+        logger.error("BOT_TOKEN not set in .env — listener will not start.")
         return
     if not SOURCE_CHANNEL_ID:
-        print("[TG] לא הוגדר SOURCE_CHANNEL_ID ב-.env — המאזין לא יופעל.", file=sys.stderr)
+        logger.error("SOURCE_CHANNEL_ID not set in .env — listener will not start.")
         return
 
-    # מאזין
-    listener = TelegramListener(
-        BOT_TOKEN,
-        SOURCE_CHANNEL_ID,
-        on_urls=process_urls
-    )
-    listener.start(loop)  # מריץ polling בת׳רד נפרד, ומשתמש בלולאה הזו להריץ את הקולבק
+    # Listener
+    try:
+        listener = TelegramListener(
+            BOT_TOKEN,
+            SOURCE_CHANNEL_ID,
+            on_urls=process_urls
+        )
+        listener.start(loop)  # runs polling in a separate thread, uses this loop for the callback
+        logger.info("TelegramListener started.")
+    except Exception as e:
+        logger.exception(f"Failed to start TelegramListener: {e}")
+        return
 
-    # הישארות רצה
+    # Keep running
     try:
         while True:
             await asyncio.sleep(3600)
     except asyncio.CancelledError:
-        pass
-
+        logger.info("amain() cancelled; shutting down.")
 
 def run():
+    logger.info("Entering run() loop")
     while True:
         try:
             asyncio.run(amain())
+            logger.info("amain() returned; breaking run() loop")
             break
         except Exception as e:
-            print(f"[BOOT] שגיאת ריצה: {type(e).__name__}: {e} — ניסיון חוזר בעוד {RETRY_DELAY_SECONDS}s", file=sys.stderr)
+            logger.exception(f"Top-level run() error: {e}; will retry in {RETRY_DELAY_SECONDS}s")
             time.sleep(RETRY_DELAY_SECONDS)
-
 
 if __name__ == "__main__":
     run()

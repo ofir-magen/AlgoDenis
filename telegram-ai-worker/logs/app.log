@@ -1,0 +1,117 @@
+2025-09-16 16:29:48 [INFO] ai:build_logger:46 - Logger initialized (level=INFO, file='logs/app.log')
+2025-09-16 16:29:49 [INFO] tg-listener:build_logger:46 - Logger initialized (level=INFO, file='logs/app.log')
+2025-09-16 16:29:49 [INFO] main:build_logger:46 - Logger initialized (level=INFO, file='logs/app.log')
+2025-09-16 16:29:49 [INFO] main:run:128 - Entering run() loop
+2025-09-16 16:29:49 [INFO] main:amain:92 - Starting amain()
+2025-09-16 16:29:49 [INFO] tg-listener:_build_httpx_request_from_env:70 - HTTPXRequest built (proxy=False, http_version=default)
+2025-09-16 16:29:49 [INFO] tg-listener:__init__:337 - TelegramMessenger initialized for chat_id=-4902373695
+2025-09-16 16:29:49 [INFO] main:amain:96 - TelegramMessenger ready for group -4902373695
+2025-09-16 16:29:49 [INFO] tg-listener:_build_httpx_request_from_env:70 - HTTPXRequest built (proxy=False, http_version=default)
+2025-09-16 16:29:49 [INFO] tg-listener:start:331 - Telegram polling thread started.
+2025-09-16 16:29:49 [INFO] main:amain:115 - TelegramListener started.
+2025-09-16 16:29:49 [INFO] tg-listener:_build_app:187 - Building telegram Application instance
+2025-09-16 16:29:49 [INFO] tg-listener:run:314 - Telegram polling starting…
+2025-09-16 16:30:36 [INFO] tg-listener:_extract_urls:54 - _extract_urls found 3 unique urls
+2025-09-16 16:30:36 [INFO] tg-listener:on_channel_post:206 - Channel post at 2025-09-16 13:30:36 | text_len=450 | urls=3
+2025-09-16 16:30:36 [INFO] tg-listener:on_channel_post:232 - Post parsed: question_text_len=134, link_text='https://maya.tase.co.il/reports/details/1693082', rest_urls=2, matrix=yes
+2025-09-16 16:30:36 [INFO] main:process_urls:40 - process_urls invoked with 2 URLs; link_text='https://maya.tase.co.il/reports/details/1693082'
+2025-09-16 16:30:36 [INFO] main:process_urls:57 - Sending 2 URLs to GPT…
+2025-09-16 16:30:36 [INFO] ai:ask_with_sources:199 - Processing source: https://mayafiles.tase.co.il/rhtm/1693001-1694000/H1693082.htm
+2025-09-16 16:30:36 [INFO] ai:_head_content_type:88 - _head_content_type url=https://mayafiles.tase.co.il/rhtm/1693001-1694000/H1693082.htm -> 'text/html'
+2025-09-16 16:30:36 [INFO] ai:_download_bytes:78 - _download_bytes OK url=https://mayafiles.tase.co.il/rhtm/1693001-1694000/H1693082.htm ct='text/html' size=46159
+2025-09-16 16:30:36 [WARNING] ai:_convert_html_str_to_pdf_file:141 - No HTML->PDF converter available; will fall back to text.
+2025-09-16 16:30:36 [INFO] ai:ask_with_sources:269 - Sent HTML as cleaned text (no converter available) for https://mayafiles.tase.co.il/rhtm/1693001-1694000/H1693082.htm
+2025-09-16 16:30:36 [INFO] ai:ask_with_sources:199 - Processing source: https://mayafiles.tase.co.il/rpdf/1693001-1694000/P1693082-00.pdf
+2025-09-16 16:30:36 [INFO] ai:_head_content_type:88 - _head_content_type url=https://mayafiles.tase.co.il/rpdf/1693001-1694000/P1693082-00.pdf -> 'application/pdf'
+2025-09-16 16:30:36 [INFO] ai:_download_bytes:78 - _download_bytes OK url=https://mayafiles.tase.co.il/rpdf/1693001-1694000/P1693082-00.pdf ct='application/pdf' size=79955
+2025-09-16 16:30:36 [INFO] ai:_save_bytes_to_temp_pdf:98 - Saved temp PDF: /var/folders/gr/_6m6pf5s5fv508hgv13ww5rm0000gn/T/tmphdtdzctm.pdf (79955 bytes)
+2025-09-16 16:30:38 [INFO] ai:ask_with_sources:253 - Uploaded remote PDF (via HEAD): https://mayafiles.tase.co.il/rpdf/1693001-1694000/P1693082-00.pdf
+2025-09-16 16:30:38 [INFO] ai:ask_with_sources:330 - Prepared 2 content items. Sending to model='gpt-5'…
+2025-09-16 16:31:40 [INFO] ai:ask_with_sources:339 - Model response received. length=131
+2025-09-16 16:31:40 [INFO] ai:ask_with_sources:350 - Cleaned temp file: /var/folders/gr/_6m6pf5s5fv508hgv13ww5rm0000gn/T/tmphdtdzctm.pdf
+2025-09-16 16:31:40 [INFO] main:process_urls:59 - Received answer from GPT.
+2025-09-16 16:31:40 [INFO] tg-listener:send_text_with_button:353 - Message with buttons sent to target group.
+2025-09-16 16:31:40 [INFO] main:process_urls:83 - Message sent to Telegram target group successfully.
+2025-09-16 16:32:04 [INFO] tg-listener:on_button_click:290 - Forwarded decision to UsersGroupChat.
+2025-09-16 16:33:51 [INFO] tg-listener:_extract_urls:54 - _extract_urls found 3 unique urls
+2025-09-16 16:33:51 [INFO] tg-listener:on_channel_post:206 - Channel post at 2025-09-16 13:33:51 | text_len=429 | urls=3
+2025-09-16 16:33:51 [INFO] tg-listener:on_channel_post:232 - Post parsed: question_text_len=111, link_text='https://maya.tase.co.il/reports/details/1693086', rest_urls=2, matrix=yes
+2025-09-16 16:33:51 [INFO] main:process_urls:40 - process_urls invoked with 2 URLs; link_text='https://maya.tase.co.il/reports/details/1693086'
+2025-09-16 16:33:51 [INFO] main:process_urls:57 - Sending 2 URLs to GPT…
+2025-09-16 16:33:51 [INFO] ai:ask_with_sources:199 - Processing source: https://mayafiles.tase.co.il/rpdf/1693001-1694000/P1693086-00.pdf
+2025-09-16 16:33:51 [INFO] ai:_head_content_type:88 - _head_content_type url=https://mayafiles.tase.co.il/rpdf/1693001-1694000/P1693086-00.pdf -> 'application/pdf'
+2025-09-16 16:33:52 [INFO] ai:_download_bytes:78 - _download_bytes OK url=https://mayafiles.tase.co.il/rpdf/1693001-1694000/P1693086-00.pdf ct='application/pdf' size=4615284
+2025-09-16 16:33:52 [INFO] ai:_save_bytes_to_temp_pdf:98 - Saved temp PDF: /var/folders/gr/_6m6pf5s5fv508hgv13ww5rm0000gn/T/tmpbzxzije1.pdf (4615284 bytes)
+2025-09-16 16:33:55 [INFO] ai:ask_with_sources:253 - Uploaded remote PDF (via HEAD): https://mayafiles.tase.co.il/rpdf/1693001-1694000/P1693086-00.pdf
+2025-09-16 16:33:55 [INFO] ai:ask_with_sources:199 - Processing source: https://mayafiles.tase.co.il/rpdf/1693001-1694000/P1693086-01.pdf
+2025-09-16 16:33:55 [INFO] ai:_head_content_type:88 - _head_content_type url=https://mayafiles.tase.co.il/rpdf/1693001-1694000/P1693086-01.pdf -> 'application/pdf'
+2025-09-16 16:33:55 [INFO] ai:_download_bytes:78 - _download_bytes OK url=https://mayafiles.tase.co.il/rpdf/1693001-1694000/P1693086-01.pdf ct='application/pdf' size=138610
+2025-09-16 16:33:55 [INFO] ai:_save_bytes_to_temp_pdf:98 - Saved temp PDF: /var/folders/gr/_6m6pf5s5fv508hgv13ww5rm0000gn/T/tmpopsy0blm.pdf (138610 bytes)
+2025-09-16 16:33:56 [INFO] ai:ask_with_sources:253 - Uploaded remote PDF (via HEAD): https://mayafiles.tase.co.il/rpdf/1693001-1694000/P1693086-01.pdf
+2025-09-16 16:33:56 [INFO] ai:ask_with_sources:330 - Prepared 2 content items. Sending to model='gpt-5'…
+2025-09-16 16:34:07 [INFO] main:amain:125 - amain() cancelled; shutting down.
+2025-09-16 16:34:12 [INFO] ai:build_logger:53 - Logger initialized (level=INFO, file='logs/app.log', console=False)
+2025-09-16 16:34:12 [INFO] tg-listener:build_logger:53 - Logger initialized (level=INFO, file='logs/app.log', console=False)
+2025-09-16 16:34:12 [INFO] main:build_logger:53 - Logger initialized (level=INFO, file='logs/app.log', console=False)
+2025-09-16 16:34:12 [INFO] main:run:128 - Entering run() loop
+2025-09-16 16:34:12 [INFO] main:amain:92 - Starting amain()
+2025-09-16 16:34:12 [INFO] tg-listener:_build_httpx_request_from_env:70 - HTTPXRequest built (proxy=False, http_version=default)
+2025-09-16 16:34:12 [INFO] tg-listener:__init__:337 - TelegramMessenger initialized for chat_id=-4902373695
+2025-09-16 16:34:12 [INFO] main:amain:96 - TelegramMessenger ready for group -4902373695
+2025-09-16 16:34:12 [INFO] tg-listener:_build_httpx_request_from_env:70 - HTTPXRequest built (proxy=False, http_version=default)
+2025-09-16 16:34:12 [INFO] tg-listener:start:331 - Telegram polling thread started.
+2025-09-16 16:34:12 [INFO] main:amain:115 - TelegramListener started.
+2025-09-16 16:34:12 [INFO] tg-listener:_build_app:187 - Building telegram Application instance
+2025-09-16 16:34:12 [INFO] tg-listener:run:314 - Telegram polling starting…
+2025-09-16 16:34:24 [INFO] main:amain:125 - amain() cancelled; shutting down.
+2025-09-16 16:34:24 [INFO] main:run:132 - amain() returned; breaking run() loop
+2025-09-16 16:34:27 [INFO] ai:build_logger:53 - Logger initialized (level=INFO, file='logs/app.log', console=False)
+2025-09-16 16:34:27 [INFO] tg-listener:build_logger:53 - Logger initialized (level=INFO, file='logs/app.log', console=False)
+2025-09-16 16:34:27 [INFO] main:build_logger:53 - Logger initialized (level=INFO, file='logs/app.log', console=False)
+2025-09-16 16:34:27 [INFO] main:run:128 - Entering run() loop
+2025-09-16 16:34:27 [INFO] main:amain:92 - Starting amain()
+2025-09-16 16:34:27 [INFO] tg-listener:_build_httpx_request_from_env:70 - HTTPXRequest built (proxy=False, http_version=default)
+2025-09-16 16:34:27 [INFO] tg-listener:__init__:337 - TelegramMessenger initialized for chat_id=-4902373695
+2025-09-16 16:34:27 [INFO] main:amain:96 - TelegramMessenger ready for group -4902373695
+2025-09-16 16:34:27 [INFO] tg-listener:_build_httpx_request_from_env:70 - HTTPXRequest built (proxy=False, http_version=default)
+2025-09-16 16:34:27 [INFO] tg-listener:_build_app:187 - Building telegram Application instance
+2025-09-16 16:34:27 [INFO] tg-listener:start:331 - Telegram polling thread started.
+2025-09-16 16:34:27 [INFO] main:amain:115 - TelegramListener started.
+2025-09-16 16:34:27 [INFO] tg-listener:run:314 - Telegram polling starting…
+2025-09-16 16:34:55 [INFO] ai:build_logger:53 - Logger initialized (level=INFO, file='logs/app.log', console=False)
+2025-09-16 16:34:55 [INFO] tg-listener:build_logger:53 - Logger initialized (level=INFO, file='logs/app.log', console=False)
+2025-09-16 16:34:55 [INFO] main:build_logger:53 - Logger initialized (level=INFO, file='logs/app.log', console=False)
+2025-09-16 16:34:55 [INFO] main:run:128 - Entering run() loop
+2025-09-16 16:34:55 [INFO] main:amain:92 - Starting amain()
+2025-09-16 16:34:55 [INFO] tg-listener:_build_httpx_request_from_env:70 - HTTPXRequest built (proxy=False, http_version=default)
+2025-09-16 16:34:55 [INFO] tg-listener:__init__:337 - TelegramMessenger initialized for chat_id=-4902373695
+2025-09-16 16:34:55 [INFO] main:amain:96 - TelegramMessenger ready for group -4902373695
+2025-09-16 16:34:55 [INFO] tg-listener:_build_httpx_request_from_env:70 - HTTPXRequest built (proxy=False, http_version=default)
+2025-09-16 16:34:55 [INFO] tg-listener:_build_app:187 - Building telegram Application instance
+2025-09-16 16:34:55 [INFO] tg-listener:start:331 - Telegram polling thread started.
+2025-09-16 16:34:55 [INFO] main:amain:115 - TelegramListener started.
+2025-09-16 16:34:55 [INFO] tg-listener:run:314 - Telegram polling starting…
+2025-09-16 16:35:31 [INFO] tg-listener:_extract_urls:54 - _extract_urls found 3 unique urls
+2025-09-16 16:35:31 [INFO] tg-listener:on_channel_post:206 - Channel post at 2025-09-16 13:35:30 | text_len=429 | urls=3
+2025-09-16 16:35:31 [INFO] tg-listener:on_channel_post:232 - Post parsed: question_text_len=111, link_text='https://maya.tase.co.il/reports/details/1693086', rest_urls=2, matrix=yes
+2025-09-16 16:35:31 [INFO] main:process_urls:40 - process_urls invoked with 2 URLs; link_text='https://maya.tase.co.il/reports/details/1693086'
+2025-09-16 16:35:31 [INFO] main:process_urls:57 - Sending 2 URLs to GPT…
+2025-09-16 16:35:31 [INFO] ai:ask_with_sources:199 - Processing source: https://mayafiles.tase.co.il/rpdf/1693001-1694000/P1693086-00.pdf
+2025-09-16 16:35:31 [INFO] ai:_head_content_type:88 - _head_content_type url=https://mayafiles.tase.co.il/rpdf/1693001-1694000/P1693086-00.pdf -> 'application/pdf'
+2025-09-16 16:35:31 [INFO] ai:_download_bytes:78 - _download_bytes OK url=https://mayafiles.tase.co.il/rpdf/1693001-1694000/P1693086-00.pdf ct='application/pdf' size=4615284
+2025-09-16 16:35:31 [INFO] ai:_save_bytes_to_temp_pdf:98 - Saved temp PDF: /var/folders/gr/_6m6pf5s5fv508hgv13ww5rm0000gn/T/tmpoon7k22i.pdf (4615284 bytes)
+2025-09-16 16:35:35 [INFO] ai:ask_with_sources:253 - Uploaded remote PDF (via HEAD): https://mayafiles.tase.co.il/rpdf/1693001-1694000/P1693086-00.pdf
+2025-09-16 16:35:35 [INFO] ai:ask_with_sources:199 - Processing source: https://mayafiles.tase.co.il/rpdf/1693001-1694000/P1693086-01.pdf
+2025-09-16 16:35:35 [INFO] ai:_head_content_type:88 - _head_content_type url=https://mayafiles.tase.co.il/rpdf/1693001-1694000/P1693086-01.pdf -> 'application/pdf'
+2025-09-16 16:35:35 [INFO] ai:_download_bytes:78 - _download_bytes OK url=https://mayafiles.tase.co.il/rpdf/1693001-1694000/P1693086-01.pdf ct='application/pdf' size=138610
+2025-09-16 16:35:35 [INFO] ai:_save_bytes_to_temp_pdf:98 - Saved temp PDF: /var/folders/gr/_6m6pf5s5fv508hgv13ww5rm0000gn/T/tmpwyfimzce.pdf (138610 bytes)
+2025-09-16 16:35:36 [INFO] ai:ask_with_sources:253 - Uploaded remote PDF (via HEAD): https://mayafiles.tase.co.il/rpdf/1693001-1694000/P1693086-01.pdf
+2025-09-16 16:35:36 [INFO] ai:ask_with_sources:330 - Prepared 2 content items. Sending to model='gpt-5'…
+2025-09-16 16:36:28 [INFO] ai:ask_with_sources:339 - Model response received. length=139
+2025-09-16 16:36:28 [INFO] ai:ask_with_sources:350 - Cleaned temp file: /var/folders/gr/_6m6pf5s5fv508hgv13ww5rm0000gn/T/tmpoon7k22i.pdf
+2025-09-16 16:36:28 [INFO] ai:ask_with_sources:350 - Cleaned temp file: /var/folders/gr/_6m6pf5s5fv508hgv13ww5rm0000gn/T/tmpwyfimzce.pdf
+2025-09-16 16:36:28 [INFO] main:process_urls:59 - Received answer from GPT.
+2025-09-16 16:36:29 [INFO] tg-listener:send_text_with_button:353 - Message with buttons sent to target group.
+2025-09-16 16:36:29 [INFO] main:process_urls:83 - Message sent to Telegram target group successfully.
+2025-09-16 16:40:47 [INFO] main:amain:125 - amain() cancelled; shutting down.
+2025-09-16 16:40:47 [INFO] main:run:132 - amain() returned; breaking run() loop
