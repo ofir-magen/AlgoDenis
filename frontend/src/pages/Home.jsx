@@ -1,6 +1,8 @@
 import { Link } from 'react-router-dom'
 import '../styles/home.css'
 import logoUrl from '../assets/logo.svg'
+import DashboardWidget from '../components/DashboardWidget.jsx'
+
 
 export default function Home() {
   return (
@@ -39,7 +41,6 @@ export default function Home() {
         </div>
 
         <div className="hero__visual">
-          {/* מקום ל־gif / תמונה */}
           <div className="visual-frame">
             <div className="visual-sheen"></div>
             <div className="fake-chart">
@@ -77,6 +78,9 @@ export default function Home() {
         </div>
       </section>
 
+      {/* DASHBOARD WIDGET – Tabs inside Home (no page navigation) */}
+      <DashboardWidget defaultTab="positions" height={480} />
+
       {/* HOW IT WORKS */}
       <section id="how" className="how container">
         <h2>איך זה עובד?</h2>
@@ -99,7 +103,7 @@ export default function Home() {
         </div>
       </section>
 
-      {/* PRICING (דוגמה) */}
+      {/* PRICING */}
       <section id="pricing" className="pricing container">
         <h2>תמחור</h2>
         <div className="pricing__grid">

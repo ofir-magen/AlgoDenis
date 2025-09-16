@@ -3,6 +3,8 @@ import Home from './pages/Home.jsx'
 import Auth from './pages/Auth.jsx'
 import Chat from './pages/Chat.jsx'
 import Pay from './pages/Pay.jsx'
+import Positions from './pages/Positions.jsx'
+import Stats from './pages/Stats.jsx'
 import Navbar from './components/Navbar.jsx'
 import Footer from './components/Footer.jsx'
 
@@ -16,6 +18,8 @@ export default function App() {
           <Route path="/auth" element={<Auth />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/pay" element={<Pay />} />
+          <Route path="/positions" element={<Positions />} />
+          <Route path="/stats" element={<Stats />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
