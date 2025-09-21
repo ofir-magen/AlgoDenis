@@ -260,3 +260,13 @@ table.users {
   .segmented { padding:4px; }
   .segmented__btn { min-width: 96px; padding:8px 14px; font-weight:600; }
 }
+/* עיצוב האייקון של הלוח שנה ב-datetime-local */
+input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: invert(1) brightness(1.5); /* הפיכת שחור ללבן ובהירות נוספת */
+  cursor: pointer;
+  opacity: 0.9;
+}
+
+input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
+  filter: invert(1) brightness(2); /* בהיר יותר כשעוברים עם העכבר */
+}

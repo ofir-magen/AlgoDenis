@@ -1,9 +1,9 @@
 // src/pages/SettingsPage.jsx
 import React, { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 
 const API = import.meta.env.VITE_ADMIN_API;
 
-// עוזר לשלוח Authorization מכל מקום
 function apiFetch(path, init = {}) {
   const token = localStorage.getItem("admin_token");
   return fetch(`${API}${path}`, {
@@ -50,7 +50,7 @@ export default function SettingsPage() {
     }
     try {
       const res = await apiFetch("/settings", {
-        method: "PATCH", // אם בשרת זה PUT — שנה כאן ל- "PUT"
+        method: "PATCH",
         body: JSON.stringify(payload),
       });
       if (res.status === 401) {
@@ -99,6 +99,10 @@ export default function SettingsPage() {
       </label>
 
       <button className="btn-primary" onClick={saveSettings}>שמור</button>
+
+      <div style={{ marginTop: 12 }}>
+        <Link to="/data" className="topbtn">פתח Data</Link>
+      </div>
     </div>
   );
 }

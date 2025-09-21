@@ -1,9 +1,11 @@
+// frontend/src/components/PositionsTable.jsx
 import { useEffect, useMemo, useState } from 'react'
 
 /**
  * PositionsTable
- * نمایش נתוני פוזיציות לפי הסכמה החדשה:
- * symbol, signal_type, entry_date, entry_price, exit_date, exit_price, change_pct
+ * תואם לסכמה:
+ * symbol, signal_type, entry_time, entry_price, exit_time, exit_price, change_pct
+ * (תואם לאחור גם ל-entry_date/exit_date)
  */
 export default function PositionsTable({
   apiBase,
@@ -86,17 +88,22 @@ export default function PositionsTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, i) => (
-              <tr key={i} className="tr-row">
-                <Td mono>{r.symbol}</Td>
-                <Td>{labelSignal(r.signal_type)}</Td>
-                <Td>{fmtDate(r.entry_date)}</Td>
-                <Td align="right">{fmtNum(r.entry_price)}</Td>
-                <Td>{fmtDate(r.exit_date)}</Td>
-                <Td align="right">{fmtNum(r.exit_price)}</Td>
-                <Td align="right" tone={tone(r.change_pct)}>{fmtPct(r.change_pct)}</Td>
-              </tr>
-            ))}
+            {rows.map((r, i) => {
+              // תאימות לשני שמות השדות
+              const entryTs = r.entry_time ?? r.entry_date
+              const exitTs  = r.exit_time  ?? r.exit_date
+              return (
+                <tr key={i} className="tr-row">
+                  <Td mono>{r.symbol}</Td>
+                  <Td>{labelSignal(r.signal_type)}</Td>
+                  <Td>{fmtDate(entryTs)}</Td>
+                  <Td align="right">{fmtNum(r.entry_price)}</Td>
+                  <Td>{fmtDate(exitTs)}</Td>
+                  <Td align="right">{fmtNum(r.exit_price)}</Td>
+                  <Td align="right" tone={tone(r.change_pct)}>{fmtPct(r.change_pct)}</Td>
+                </tr>
+              )
+            })}
             {!loading && rows.length === 0 && (
               <tr><Td colSpan={7} align="center" dim>אין נתונים</Td></tr>
             )}
@@ -131,10 +138,27 @@ function labelSignal(s){
   if(v==='long') return 'לונג'
   if(v==='short') return 'שורט'
   if(v==='hold') return 'החזק'
+  // אם זה BUY/SELL/NONE נשאיר כמו שהוא
   return s || '—'
 }
 
-function fmtDate(v){ try{ return v ? new Date(v).toLocaleString() : '—' }catch{ return String(v||'—') } }
+/* פרסינג תאריך/שעה סלחני (תומך ב-"2025-09-21T15:00:00" וגם "2025-09-21 15:00") */
+function fmtDate(v){
+  if (v == null || v === '') return '—'
+  const s = String(v).trim()
+  // אם התקבל טיים-סטמפ מספרי
+  if (/^\d{10,13}$/.test(s)) {
+    const ms = s.length === 13 ? Number(s) : Number(s) * 1000
+    const d = new Date(ms)
+    return isNaN(d.getTime()) ? s : d.toLocaleString('he-IL', { hour12: false })
+  }
+  const withT = s.includes('T') ? s : s.replace(' ', 'T')
+  const withSec = /\d{2}:\d{2}:\d{2}$/.test(withT) ? withT : (/\d{2}:\d{2}$/.test(withT) ? withT + ':00' : withT)
+  const d = new Date(withSec)
+  if (!isNaN(d.getTime())) return d.toLocaleString('he-IL', { hour12: false })
+  return s
+}
+
 function fmtNum(v){ return (v==null || v==='') ? '—' : Number(v).toFixed(2) }
 function fmtPct(v){ return (v==null || v==='') ? '—' : (Number(v)>=0?'+':'') + Number(v).toFixed(2) + '%' }
 function tone(x){ if (x==null || x==='') return 'flat'; return Number(x) > 0 ? 'up' : Number(x) < 0 ? 'down' : 'flat' }

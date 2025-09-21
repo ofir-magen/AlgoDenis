@@ -3,7 +3,7 @@ import json
 import os
 import datetime as dt
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,13 +12,13 @@ from jose import jwt, JWTError
 from dotenv import load_dotenv
 
 from sqlalchemy import (
-    create_engine, MetaData, Table, select, update, delete, text as sql_text,
-    DateTime as SATime, Boolean as SABool, Integer as SAInt, Float as SAFloat
+    create_engine, MetaData, Table, select, update, delete, insert, text as sql_text,
+    DateTime as SATime, Boolean as SABool, Integer as SAInt, Float as SAFloat, String as SAString
 )
 from sqlalchemy.orm import sessionmaker
 
 # ================== ENV ==================
-load_dotenv()  # נטען .env מאותה תיקייה שממנה מריצים או מהסביבה
+load_dotenv()
 
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASS", "admin")
@@ -26,89 +26,83 @@ ADMIN_PASS = os.getenv("ADMIN_PASS", "admin")
 JWT_SECRET = os.getenv("ADMIN_JWT_SECRET", "CHANGE_ME")
 JWT_ALG = "HS256"
 JWT_EXPIRE_MIN = int(os.getenv("ADMIN_JWT_EXPIRE_MIN", "240"))
-SETTINGS_FILE_PATH = os.getenv("SETTINGS_FILE_PATH", "CHANGE_ME")
-print("ofir_SETTINGS_FILE_PATH: ", SETTINGS_FILE_PATH)
 
-# ================== Setting Json get/set (נתונים) ==================
+SETTINGS_FILE_PATH = os.getenv("SETTINGS_FILE_PATH", "db/settings.json")
 
-def _resolve_settings_path() -> str:
+# -------------------------------------------------------
+# RESOLVERS — כמו USERS, גם ל-DataLog באותה שיטה (sqlite:///..)
+# -------------------------------------------------------
+def _resolve_sqlite_url_from_env_var(env_key: str, example_rel: str) -> str:
     """
-    פותר את SETTINGS_FILE_PATH כנתיב מוחלט יחסית למיקום של הקובץ הזה (app.py),
-    כדי שההרצה לא תהיה תלויה בתקיית ה-Working Directory.
+    מצפה למשתנה סביבה בפורמט:
+      sqlite:///../backend/Users.db
+    ומחזיר URL מלא עם נתיב מוחלט, יחסית למיקום app.py.
+    * תומך אך ורק ב-sqlite:/// (נתיב יחסי).
     """
-    base_dir = Path(__file__).resolve().parent
-    return str((base_dir / SETTINGS_FILE_PATH).resolve())
-
-def getJsonData():
-    """קוראת את קובץ ה-JSON, זורקת שגיאה אם אין גישה או שיש קובץ פגום"""
-    path = _resolve_settings_path()
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"JSON file not found at {path}")
-    try:
-        with open(path, "r") as f:
-            return json.load(f)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Failed to parse JSON file: {e}")
-    except Exception as e:
-        raise RuntimeError(f"Unexpected error reading JSON: {e}")
-
-def setJsonData(data: dict):
-    """שומרת נתונים בקובץ JSON, זורקת שגיאה אם משהו משתבש"""
-    path = _resolve_settings_path()
-    try:
-        tmp_path = f"{path}.tmp"
-        with open(tmp_path, "w") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        os.replace(tmp_path, path)
-    except Exception as e:
-        raise RuntimeError(f"Failed to write JSON file: {e}")
-
-# (הוסר בלוק בדיקות עם הדפסות ושינוי x=99 כדי למנוע תופעות לוואי)
-
-# ================== Users DB (צורה יחידה!) ==================
-def _resolve_users_db_url_only_relative_sqlite() -> str:
-    """
-    מצפה לערך יחיד בסביבה:
-      USERS_DB_PATH = 'sqlite:///../backend/Users.db'
-    וממיר אותו לנתיב מוחלט ביחס למיקום הקובץ הזה (app.py).
-    לא תומך בשום צורה אחרת.
-    """
-    raw = (os.getenv("USERS_DB_PATH") or "").strip()
+    raw = (os.getenv(env_key) or "").strip()
     if not raw:
-        raise RuntimeError("USERS_DB_PATH is missing in .env (expected 'sqlite:///../backend/Users.db').")
+        raise RuntimeError(f"{env_key} is missing in .env (expected 'sqlite:///{example_rel}').")
     if not raw.startswith("sqlite:///"):
-        raise RuntimeError("USERS_DB_PATH must start with 'sqlite:///' and be relative like '../backend/Users.db'.")
-
-    # שולף את החלק שאחרי 'sqlite:///' ומחשב אותו יחסית לקובץ הזה
-    rel = raw[len("sqlite:///"):]  # ../backend/Users.db
+        raise RuntimeError(f"{env_key} must start with 'sqlite:///' and be relative like '{example_rel}'.")
+    rel = raw[len("sqlite:///"):]            # ../backend/Users.db
     here = Path(__file__).resolve().parent
     abs_path = (here / rel).resolve()
-    # ודא שהתיקייה קיימת
     abs_path.parent.mkdir(parents=True, exist_ok=True)
-    # SQLite URL עם נתיב מוחלט
     return f"sqlite:///{abs_path.as_posix()}"
 
-USERS_DB_URL = _resolve_users_db_url_only_relative_sqlite()
-is_sqlite = USERS_DB_URL.startswith("sqlite:")
+# שני ה-DBs באותה צורה בדיוק
+USERS_DB_URL   = _resolve_sqlite_url_from_env_var("USERS_DB_PATH",   "../backend/Users.db")
+DATALOG_DB_URL = _resolve_sqlite_url_from_env_var("DATA_LOG_PATH",   "../backend/DataLog.db")
 
-engine = create_engine(
-    USERS_DB_URL,
-    future=True,
-    pool_pre_ping=True,
-    connect_args={"check_same_thread": False} if is_sqlite else {},
+# ================== Users DB ==================
+users_is_sqlite = USERS_DB_URL.startswith("sqlite:")
+users_engine = create_engine(
+    USERS_DB_URL, future=True, pool_pre_ping=True,
+    connect_args={"check_same_thread": False} if users_is_sqlite else {},
 )
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
-meta = MetaData()
+UsersSession = sessionmaker(bind=users_engine, autoflush=False, autocommit=False, future=True)
+users_meta = MetaData()
+users = Table("users", users_meta, autoload_with=users_engine)
 
-# טבלת users מתוך מסד הנתונים (חייבת כבר להתקיים)
-users = Table("users", meta, autoload_with=engine)
+# ================== DataLog DB ==================
+datalog_is_sqlite = DATALOG_DB_URL.startswith("sqlite:")
+datalog_engine = create_engine(
+    DATALOG_DB_URL, future=True, pool_pre_ping=True,
+    connect_args={"check_same_thread": False} if datalog_is_sqlite else {},
+)
+DataLogSession = sessionmaker(bind=datalog_engine, autoflush=False, autocommit=False, future=True)
+datalog_meta = MetaData()
+
+# אם הטבלה לא קיימת (לדוגמה בפרויקט נקי) – ניצור סכימה מינימלית מתועדת
+with datalog_engine.begin() as conn:
+    # בדיקה אם קיימת טבלה בשם datalog
+    exists = conn.exec_driver_sql(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='datalog';"
+    ).fetchone()
+    if not exists:
+        conn.exec_driver_sql("""
+        CREATE TABLE IF NOT EXISTS datalog (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          symbol TEXT NOT NULL,
+          signal_type TEXT,
+          entry_time   TEXT,
+          entry_price  REAL,
+          exit_time    TEXT,
+          exit_price   REAL,
+          change_pct   REAL,
+          assigned     TEXT,
+          created_at   TEXT DEFAULT (datetime('now')),
+          updated_at   TEXT DEFAULT (datetime('now'))
+        );
+        """)
+datalog = Table("datalog", datalog_meta, autoload_with=datalog_engine)
 
 # ================== APP ==================
-app = FastAPI()
+app = FastAPI(title="Admin API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # הפשטות — הגבל בדפדוף לפרודקשן
+    allow_origins=["*"],    # לצמצם בפרודקשן
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -134,10 +128,24 @@ def require_auth(authorization: Optional[str] = Header(default=None)) -> str:
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-# ================== Schemas ==================
-class LoginIn(BaseModel):
-    username: str
-    password: str
+# ================== Settings JSON helpers ==================
+def _resolve_settings_path() -> str:
+    base_dir = Path(__file__).resolve().parent
+    return str((base_dir / SETTINGS_FILE_PATH).resolve())
+
+def getJsonData():
+    path = _resolve_settings_path()
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"JSON file not found at {path}")
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def setJsonData(data: dict):
+    path = _resolve_settings_path()
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp_path, path)
 
 # ================== Utils ==================
 def parse_bool(v: Any) -> bool:
@@ -160,15 +168,14 @@ def parse_dt(value: Any) -> Optional[dt.datetime]:
             pass
     s = str(value).strip()
     s = s.replace(" ,", ",").replace(", ", ",")
-
     fmts = [
-        "%Y-%m-%dT%H:%M",    # <input type="datetime-local">
+        "%Y-%m-%dT%H:%M",
         "%Y-%m-%d %H:%M",
         "%Y-%m-%d %H:%M:%S",
         "%d/%m/%Y,%H:%M",
         "%d/%m/%Y, %H:%M",
         "%d.%m.%Y %H:%M",
-        "%d-%m-%Y %H:%M",
+        "%d-%m-%Y %H:%מ",
     ]
     for f in fmts:
         try:
@@ -182,34 +189,46 @@ def parse_dt(value: Any) -> Optional[dt.datetime]:
     except Exception:
         return None
 
-def allowed_columns() -> set:
-    return set(c.name for c in users.columns)
-
-IMMUTABLE = {"id", "created_at", "updated_at", "password_hash"}
-EXCLUDE_IN_RESPONSE = set()  # add secrets if needed
-
 def row_to_dict(row) -> Dict[str, Any]:
     d = dict(row._mapping)
     for k, v in list(d.items()):
         if isinstance(v, dt.datetime):
             d[k] = v.strftime("%Y-%m-%d %H:%M:%S")
-    for k in EXCLUDE_IN_RESPONSE:
-        d.pop(k, None)
     return d
+
+def _calc_change_pct(entry_price, exit_price) -> Optional[float]:
+    """חישוב שינוי % לפי מחיר כניסה/יציאה; מחזיר None אם לא ניתן לחשב."""
+    try:
+        a = float(entry_price)
+        b = float(exit_price)
+        if a == 0:
+            return None
+        return ((b - a) / a) * 100.0
+    except Exception:
+        return None
+
+# ================== Schemas ==================
+class LoginIn(BaseModel):
+    username: str
+    password: str
+
+class DataLogCreateIn(BaseModel):
+    symbol: str
+    signal_type: Optional[str] = None
+    entry_time: Optional[str] = None
+    entry_price: Optional[float] = None
+    exit_time: Optional[str] = None
+    exit_price: Optional[float] = None
+    change_pct: Optional[float] = None
 
 # ================== Routes ==================
 @app.get("/api/health")
 def health():
-    try:
-        with SessionLocal() as db:
-            if is_sqlite:
-                try:
-                    db.execute(sql_text("PRAGMA busy_timeout=5000"))
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    return {"ok": True, "db": USERS_DB_URL}
+    return {
+        "ok": True,
+        "users_db": USERS_DB_URL,
+        "datalog_db": DATALOG_DB_URL,
+    }
 
 @app.post("/api/login")
 def login(body: LoginIn):
@@ -217,50 +236,29 @@ def login(body: LoginIn):
         raise HTTPException(status_code=401, detail="Bad credentials")
     return {"token": create_token(body.username)}
 
-# -------- Settings endpoints (new) --------
+# -------- Settings --------
 @app.get("/api/settings")
 def get_settings(_: str = Depends(require_auth)):
-    try:
-        data = getJsonData()
-        # נוודא שדות בסיס ונהפוך למספרים
-        x = int(data.get("x"))
-        y = int(data.get("y"))
-        return {"x": x, "y": y}
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid settings: x/y must be integers")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read settings: {e}")
+    data = getJsonData()
+    return {"x": int(data.get("x", 0)), "y": int(data.get("y", 0))}
 
 @app.patch("/api/settings")
 async def patch_settings(request: Request, _: str = Depends(require_auth)):
-    try:
-        payload = await request.json()
-        if not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="Body must be JSON object")
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Body must be JSON object")
+    cur = getJsonData()
+    if "x" in payload: cur["x"] = int(payload["x"])
+    if "y" in payload: cur["y"] = int(payload["y"])
+    setJsonData(cur)
+    return {"x": int(cur["x"]), "y": int(cur["y"])}
 
-        cur = getJsonData()
-        if "x" in payload:
-            cur["x"] = int(payload["x"])
-        if "y" in payload:
-            cur["y"] = int(payload["y"])
-
-        # כתיבה ושיבה
-        setJsonData(cur)
-        return {"x": int(cur["x"]), "y": int(cur["y"])}
-    except HTTPException:
-        raise
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid payload: x/y must be integers")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to update settings: {e}")
-# ------------------------------------------
-
+# -------- Users --------
 @app.get("/api/users")
 def list_users(_: str = Depends(require_auth)):
-    with SessionLocal() as db:
+    with UsersSession() as db:
         res = db.execute(select(users).order_by(users.c.id.asc()))
-        rows = [row_to_dict(r) for r in res.fetchall()]
-        return rows
+        return [row_to_dict(r) for r in res.fetchall()]
 
 @app.put("/api/users/{user_id}")
 async def update_user(user_id: int, request: Request, _: str = Depends(require_auth)):
@@ -269,55 +267,138 @@ async def update_user(user_id: int, request: Request, _: str = Depends(require_a
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Body must be JSON object")
 
-    cols = allowed_columns()
+    cols = {c.name: c for c in users.columns}
+    IMMUTABLE = {"id", "created_at", "updated_at", "password_hash"}
     clean: Dict[str, Any] = {}
 
     for k, v in payload.items():
-        if k in IMMUTABLE:
+        if k in IMMUTABLE or k not in cols:
             continue
-        if k not in cols:
-            continue
-
-        coltype = users.c[k].type
-        # DateTime fields
+        coltype = cols[k].type
         if isinstance(coltype, SATime):
             clean[k] = parse_dt(v)
-        # Booleans
         elif isinstance(coltype, SABool):
             clean[k] = parse_bool(v)
-        # Numeric -> allow NULL if empty
         elif isinstance(coltype, (SAInt, SAFloat)):
             clean[k] = None if v in ("", None) else v
-        # Default: keep value as-is (strings, etc.)
         else:
             clean[k] = v
 
-    # תמיד נעדכן updated_at בצד שרת
     if "updated_at" in cols:
         clean["updated_at"] = dt.datetime.utcnow()
 
     if not clean:
         raise HTTPException(status_code=400, detail="No updatable fields provided")
 
-    try:
-        with SessionLocal() as db:
-            stmt = update(users).where(users.c.id == user_id).values(**clean)
-            r = db.execute(stmt)
-            if r.rowcount == 0:
-                raise HTTPException(status_code=404, detail="User not found")
-            db.commit()
-            row = db.execute(select(users).where(users.c.id == user_id)).first()
-            return row_to_dict(row)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Update failed: {type(e).__name__}: {e}")
+    with UsersSession() as db:
+        stmt = update(users).where(users.c.id == user_id).values(**clean)
+        r = db.execute(stmt)
+        if r.rowcount == 0:
+            raise HTTPException(status_code=404, detail="User not found")
+        db.commit()
+        row = db.execute(select(users).where(users.c.id == user_id)).first()
+        return row_to_dict(row)
 
 @app.delete("/api/users/{user_id}")
 def delete_user(user_id: int, _: str = Depends(require_auth)):
-    with SessionLocal() as db:
+    with UsersSession() as db:
         r = db.execute(delete(users).where(users.c.id == user_id))
         if r.rowcount == 0:
             raise HTTPException(status_code=404, detail="User not found")
         db.commit()
         return {"ok": True, "deleted": user_id}
+
+# -------- DataLog (CRUD + create עם assigned='admin' ו־change_pct מחושב) --------
+@app.get("/api/datalog")
+def datalog_list(_: str = Depends(require_auth)):
+    with DataLogSession() as db:
+        res = db.execute(select(datalog).order_by(datalog.c.id.asc()))
+        return [row_to_dict(r) for r in res.fetchall()]
+
+@app.post("/api/datalog")
+def datalog_create(body: DataLogCreateIn, _: str = Depends(require_auth)):
+    now = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+    change_pct = body.change_pct
+    if change_pct is None and body.entry_price is not None and body.exit_price is not None:
+        calc = _calc_change_pct(body.entry_price, body.exit_price)
+        if calc is not None:
+            change_pct = round(calc, 6)
+
+    values = {
+        "symbol": (body.symbol or "").strip(),
+        "signal_type": (body.signal_type or None),
+        "entry_time": (body.entry_time or None),
+        "entry_price": (body.entry_price if body.entry_price is not None else None),
+        "exit_time": (body.exit_time or None),
+        "exit_price": (body.exit_price if body.exit_price is not None else None),
+        "change_pct": change_pct,
+        "assigned": "admin",           # ← מקור הערך מה־Admin
+        "created_at": now,
+        "updated_at": now,
+    }
+    if not values["symbol"]:
+        raise HTTPException(status_code=400, detail="symbol is required")
+
+    with DataLogSession() as db:
+        r = db.execute(insert(datalog).values(**values))
+        db.commit()
+        new_id = r.lastrowid
+        row = db.execute(select(datalog).where(datalog.c.id == new_id)).first()
+        return row_to_dict(row)
+
+@app.put("/api/datalog/{row_id}")
+async def datalog_update(row_id: int, request: Request, _: str = Depends(require_auth)):
+    raw = await request.json()
+    payload: Dict[str, Any] = raw.get("data") if isinstance(raw, dict) and "data" in raw else raw
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Body must be JSON object")
+
+    cols = {c.name: c for c in datalog.columns}
+    IMMUTABLE = {"id", "created_at"}
+    clean: Dict[str, Any] = {}
+
+    for k, v in payload.items():
+        if k in IMMUTABLE or k not in cols:
+            continue
+        coltype = cols[k].type
+        if isinstance(coltype, (SAInt, SAFloat)):
+            clean[k] = None if v in ("", None) else v
+        else:
+            clean[k] = v
+
+    # אם לא סופק change_pct ויש מחירי כניסה/יציאה - נחשב
+    if ("change_pct" not in clean or clean["change_pct"] in (None, "")) and (
+        ("entry_price" in clean and clean["entry_price"] not in (None, "")) or
+        ("exit_price" in clean and clean["exit_price"] not in (None, ""))
+    ):
+        # נשלוף את הערכים הקיימים לשילוב עם החדשים
+        with DataLogSession() as db:
+            cur = db.execute(select(datalog).where(datalog.c.id == row_id)).first()
+            if not cur:
+                raise HTTPException(status_code=404, detail="Row not found")
+            cur_d = row_to_dict(cur)
+            ep = clean.get("entry_price", cur_d.get("entry_price"))
+            xp = clean.get("exit_price",  cur_d.get("exit_price"))
+            calc = _calc_change_pct(ep, xp)
+            if calc is not None:
+                clean["change_pct"] = round(calc, 6)
+
+    clean["updated_at"] = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+    with DataLogSession() as db:
+        r = db.execute(update(datalog).where(datalog.c.id == row_id).values(**clean))
+        if r.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Row not found")
+        db.commit()
+        row = db.execute(select(datalog).where(datalog.c.id == row_id)).first()
+        return row_to_dict(row)
+
+@app.delete("/api/datalog/{row_id}")
+def datalog_delete(row_id: int, _: str = Depends(require_auth)):
+    with DataLogSession() as db:
+        r = db.execute(delete(datalog).where(datalog.c.id == row_id))
+        if r.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Row not found")
+        db.commit()
+        return {"ok": True, "deleted": row_id}
