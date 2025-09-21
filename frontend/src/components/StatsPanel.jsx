@@ -31,24 +31,43 @@ export default function StatsPanel({ apiBase }) {
     e.preventDefault()
     setError(''); setLoading(true); setSeries([]); setSummary(null); setHoverIdx(null)
     try {
+      // מושך לפי entry_date (כך ה־backend מוגדר)
       const res = await fetch(`${API_BASE}/positions/by-range?start=${encodeURIComponent(start)}`)
       if (!res.ok) throw new Error(`API error ${res.status}`)
       const rows = await res.json()
-      if (!Array.isArray(rows) || rows.length === 0) {
-        setSummary({ points: 0, final: Number(capital), totalChangePct: 0 }); return
-      }
-      rows.sort((a,b) => new Date(a.trade_date) - new Date(b.trade_date))
 
-      // Allocation mode (A)
+      if (!Array.isArray(rows) || rows.length === 0) {
+        setSummary({ points: 0, final: Number(capital), totalChangePct: 0 })
+        return
+      }
+
+      // ממיין לפי entry_date
+      rows.sort((a,b) => new Date(a.entry_date) - new Date(b.entry_date))
+
+      // מחשב שינוי לכל פוזיציה:
+      // 1) אם יש change_pct → משתמש בו
+      // 2) אחרת, אם יש entry_price ו-exit_price → מחשב (exit-entry)/entry
+      // 3) אחרת 0 (למשל טרייד פתוח)
+      const getChange = (r) => {
+        if (isFiniteNum(r.change_pct)) return Number(r.change_pct) / 100
+        if (isFiniteNum(r.entry_price) && isFiniteNum(r.exit_price)) {
+          const e = Number(r.entry_price), x = Number(r.exit_price)
+          if (e !== 0) return (x - e) / e
+        }
+        return 0
+      }
+
+      // Allocation mode (A): בכל טרייד מסכנים risk% מההון הנוכחי
       let cur = Number(capital), risk = Math.max(0, Number(riskPct)) / 100
       const pts = []
       for (const r of rows) {
-        const t = new Date(r.trade_date)
-        const change = Number(r.change_pct || 0) / 100
+        const t = new Date(r.entry_date)  // נקודת הזמן היא תאריך הכניסה
+        const change = getChange(r)
         const pnl = (cur * risk) * change
         cur += pnl
         pts.push({ t, v: cur })
       }
+
       setSeries(pts)
       setSummary({ points: rows.length, final: cur, totalChangePct: ((cur - Number(capital))/Number(capital))*100 })
     } catch (err) {
@@ -68,8 +87,7 @@ export default function StatsPanel({ apiBase }) {
       c.style.width = w + 'px'
       c.style.height = h + 'px'
       const ctx = c.getContext('2d')
-      // set transform ONCE: we will draw using CSS units
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)  // ציור ביחידות CSS
       drawChart(c, series, hoverIdx)
     })
     ro.observe(wrap)
@@ -171,6 +189,7 @@ function localDateTimeForInput(s){ try{return s.slice(0,16)}catch{return''} }
 function toISOFromLocalInput(s){ return s ? s + ':00' : '' }
 function fmtCurrency(v){ if(!isFinite(v))return'-'; return new Intl.NumberFormat('he-IL',{style:'currency',currency:'ILS',maximumFractionDigits:2}).format(Number(v)) }
 function fmtPct(v){ if(!isFinite(v))return'-'; const n=Number(v); return (n>0?'+':'')+n.toFixed(2)+'%' }
+function isFiniteNum(x){ return x !== null && x !== '' && Number.isFinite(Number(x)) }
 
 // ===== Chart (works in CSS units; DPR handled by context transform) =====
 function drawChart(canvas, series, hoverIdx=null){
@@ -179,7 +198,6 @@ function drawChart(canvas, series, hoverIdx=null){
   const w = canvas.width / dpr
   const h = canvas.height / dpr
 
-  // DO NOT reset transform; we already setTransform(dpr,0,0,dpr,0,0) on resize
   ctx.clearRect(0,0,w,h)
 
   if(!series.length){

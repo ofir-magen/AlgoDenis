@@ -2,15 +2,15 @@ import { useEffect, useMemo, useState } from 'react'
 
 /**
  * PositionsTable
- * - Fills its parent "window" (100% width/height) when height="100%" and wrapper is borderless.
- * - Use showHeader=false when parent already renders a header/tabs above.
+ * نمایش נתוני פוזיציות לפי הסכמה החדשה:
+ * symbol, signal_type, entry_date, entry_price, exit_date, exit_price, change_pct
  */
 export default function PositionsTable({
   apiBase,
   limit = 10,
   height = '100%',
-  showHeader = false,   // parent can hide the table's inner header
-  borderless = true     // remove inner glass frame so table fills the window
+  showHeader = false,
+  borderless = true
 }) {
   const API_BASE = useMemo(() => {
     if (apiBase) return apiBase.replace(/\/+$/, '')
@@ -45,7 +45,6 @@ export default function PositionsTable({
   }, [API_BASE, limit])
 
   const containerStyle = {
-    // fill the parent window
     width: '100%',
     height,
     display: 'flex',
@@ -78,26 +77,28 @@ export default function PositionsTable({
           <thead>
             <tr>
               <Th>סימבול</Th>
-              <Th>תאריך</Th>
-              <Th>מחיר</Th>
+              <Th>סוג איתות</Th>
+              <Th>כניסה</Th>
+              <Th>מחיר כניסה</Th>
+              <Th>יציאה</Th>
+              <Th>מחיר יציאה</Th>
               <Th>% שינוי</Th>
-              <Th>ווליום</Th>
-              <Th>כיוון</Th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r, i) => (
               <tr key={i} className="tr-row">
                 <Td mono>{r.symbol}</Td>
-                <Td>{fmtDate(r.trade_date)}</Td>
-                <Td align="right">{fmtNum(r.price)}</Td>
+                <Td>{labelSignal(r.signal_type)}</Td>
+                <Td>{fmtDate(r.entry_date)}</Td>
+                <Td align="right">{fmtNum(r.entry_price)}</Td>
+                <Td>{fmtDate(r.exit_date)}</Td>
+                <Td align="right">{fmtNum(r.exit_price)}</Td>
                 <Td align="right" tone={tone(r.change_pct)}>{fmtPct(r.change_pct)}</Td>
-                <Td align="right">{fmtInt(r.volume)}</Td>
-                <Td tone={toneFromDir(r.direction)}>{labelDir(r.direction)}</Td>
               </tr>
             ))}
             {!loading && rows.length === 0 && (
-              <tr><Td colSpan={6} align="center" dim>אין נתונים</Td></tr>
+              <tr><Td colSpan={7} align="center" dim>אין נתונים</Td></tr>
             )}
           </tbody>
         </table>
@@ -125,10 +126,15 @@ function Td({ children, align='start', tone, mono, dim, colSpan }) {
   )
 }
 
-function fmtDate(v){ try{ return new Date(v).toLocaleString() }catch{ return String(v||'') } }
-function fmtNum(v){ return v==null?'-': Number(v).toFixed(2) }
-function fmtPct(v){ return v==null?'-': (Number(v)>=0?'+':'') + Number(v).toFixed(2) + '%' }
-function fmtInt(v){ return v==null?'-': new Intl.NumberFormat().format(Number(v)) }
-function tone(x){ if (x==null) return 'flat'; return Number(x) > 0 ? 'up' : Number(x) < 0 ? 'down' : 'flat' }
-function toneFromDir(d){ if(!d) return 'flat'; const s=String(d).toLowerCase(); return s==='up'?'up':s==='down'?'down':'flat' }
-function labelDir(d){ const t=toneFromDir(d); return t==='up'?'עליה': t==='down'?'ירידה':'—' }
+function labelSignal(s){
+  const v=String(s||'').toLowerCase()
+  if(v==='long') return 'לונג'
+  if(v==='short') return 'שורט'
+  if(v==='hold') return 'החזק'
+  return s || '—'
+}
+
+function fmtDate(v){ try{ return v ? new Date(v).toLocaleString() : '—' }catch{ return String(v||'—') } }
+function fmtNum(v){ return (v==null || v==='') ? '—' : Number(v).toFixed(2) }
+function fmtPct(v){ return (v==null || v==='') ? '—' : (Number(v)>=0?'+':'') + Number(v).toFixed(2) + '%' }
+function tone(x){ if (x==null || x==='') return 'flat'; return Number(x) > 0 ? 'up' : Number(x) < 0 ? 'down' : 'flat' }

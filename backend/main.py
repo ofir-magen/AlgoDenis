@@ -1,6 +1,6 @@
-# main.py
+# backend/main.py
 from dotenv import load_dotenv
-load_dotenv()  # טען .env לפני שימוש ב-os.getenv
+load_dotenv()
 
 import os
 import asyncio
@@ -20,8 +20,6 @@ from auth import router as auth_router, verify_jwt
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-# ניתן להגדיר ב-.env:
-# DATA_LOG_URL=sqlite:///./DataLog.db
 DATA_LOG_URL = os.getenv("DATA_LOG_URL", "sqlite:///./DataLog.db")
 
 DataLogEngine = create_engine(
@@ -30,29 +28,51 @@ DataLogEngine = create_engine(
 )
 DataLogSession = sessionmaker(bind=DataLogEngine, autoflush=False, autocommit=False)
 
-# יצירת טבלת דמו אם לא קיימת (להתאים/להסיר לפי הסכימה האמיתית שלך)
-with DataLogEngine.begin() as conn:
-    conn.exec_driver_sql(
-        """
-        CREATE TABLE IF NOT EXISTS positions (
-          id INTEGER PRIMARY KEY,
-          symbol TEXT NOT NULL,
-          trade_date TIMESTAMP NOT NULL,
-          price REAL,
-          change_pct REAL,
-          volume INTEGER,
-          direction TEXT  -- 'up' | 'down' | 'flat'
-        );
-        """
-    )
+# --- סכמת positions החדשה + מיגרציה רכה (SQLite) ---
+def _ensure_positions_schema():
+    with DataLogEngine.begin() as conn:
+        # צור טבלה אם לא קיימת
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE IF NOT EXISTS positions (
+              id INTEGER PRIMARY KEY,
+              symbol TEXT NOT NULL,
+              signal_type TEXT,
+              entry_date TEXT NOT NULL,
+              entry_price REAL,
+              exit_date TEXT,
+              exit_price REAL,
+              change_pct REAL
+            );
+            """
+        )
+        # הוספת עמודות חסרות אם עולה מצורך (מיגרציה סלחנית)
+        rows = conn.exec_driver_sql("PRAGMA table_info(positions);").fetchall()
+        cols = {r[1] for r in rows}
+        wanted = {
+            "symbol": "TEXT",
+            "signal_type": "TEXT",
+            "entry_date": "TEXT",
+            "entry_price": "REAL",
+            "exit_date": "TEXT",
+            "exit_price": "REAL",
+            "change_pct": "REAL",
+        }
+        for name, coltype in wanted.items():
+            if name not in cols:
+                conn.exec_driver_sql(f"ALTER TABLE positions ADD COLUMN {name} {coltype};")
+
+_ensure_positions_schema()
+
 
 class PositionOut(BaseModel):
     symbol: str
-    trade_date: dt.datetime
-    price: Optional[float] = None
+    signal_type: Optional[str] = None
+    entry_date: dt.datetime
+    entry_price: Optional[float] = None
+    exit_date: Optional[dt.datetime] = None
+    exit_price: Optional[float] = None
     change_pct: Optional[float] = None
-    volume: Optional[int] = None
-    direction: Optional[str] = None
 
 
 # -----------
@@ -82,8 +102,23 @@ async def health():
 
 
 # --------------------------------------------
-# Positions API — קריאה מה-DataLog לפי צרכים
+# Positions API — לפי הסכמה החדשה שביקשת
 # --------------------------------------------
+
+SELECT_COLS = """
+symbol, signal_type, entry_date, entry_price, exit_date, exit_price, change_pct
+"""
+
+def _parse_dt(s: Optional[str]) -> Optional[dt.datetime]:
+    if not s:
+        return None
+    try:
+        return dt.datetime.fromisoformat(s)
+    except Exception:
+        try:
+            return dt.datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
 
 @app.get("/api/positions/recent", response_model=List[PositionOut])
 async def recent_positions(
@@ -91,32 +126,29 @@ async def recent_positions(
     order: str = Query("desc", pattern="^(?i)(asc|desc)$")
 ):
     """
-    מחזיר פוזיציות אחרונות מטבלת positions.
-    שליטה בגודל הרשימה עם limit ובכיוון מיון עם order=asc|desc.
+    מחזיר פוזיציות אחרונות לפי entry_date (ברירת מחדל: יורד).
     """
     order_sql = "ASC" if str(order).lower() == "asc" else "DESC"
-
     sql = text(
         f"""
-        SELECT symbol, trade_date, price, change_pct, volume, direction
+        SELECT {SELECT_COLS}
         FROM positions
-        ORDER BY trade_date {order_sql}
+        ORDER BY datetime(entry_date) {order_sql}
         LIMIT :limit
         """
     )
     with DataLogSession() as s:
         rows = s.execute(sql, {"limit": int(limit)}).all()
         out: List[PositionOut] = []
-        for (symbol, trade_date, price, change_pct, volume, direction) in rows:
-            if isinstance(trade_date, str):
-                trade_date = _parse_dt(trade_date)
+        for (symbol, signal_type, entry_date, entry_price, exit_date, exit_price, change_pct) in rows:
             out.append(PositionOut(
                 symbol=symbol,
-                trade_date=trade_date,
-                price=price,
+                signal_type=signal_type,
+                entry_date=_parse_dt(entry_date) or dt.datetime.utcnow(),
+                entry_price=entry_price,
+                exit_date=_parse_dt(exit_date),
+                exit_price=exit_price,
                 change_pct=change_pct,
-                volume=volume,
-                direction=direction,
             ))
         return out
 
@@ -124,7 +156,7 @@ async def recent_positions(
 @app.get("/api/positions/by-range", response_model=List[PositionOut])
 async def positions_by_range(start: str, end: Optional[str] = None):
     """
-    מחזיר רשומות בין start (כולל) ל-end (ברירת מחדל: עכשיו), מסודרות לפי זמן עולה.
+    מחזיר רשומות בין start ל-end לפי entry_date, מסודרות עולה.
     start/end בפורמט ISO, למשל: 2025-09-01T00:00:00
     """
     try:
@@ -141,26 +173,27 @@ async def positions_by_range(start: str, end: Optional[str] = None):
         end_dt = dt.datetime.utcnow()
 
     sql = text(
-        """
-        SELECT symbol, trade_date, price, change_pct, volume, direction
+        f"""
+        SELECT {SELECT_COLS}
         FROM positions
-        WHERE trade_date >= :start_dt AND trade_date <= :end_dt
-        ORDER BY trade_date ASC
+        WHERE datetime(entry_date) >= datetime(:start_dt)
+          AND datetime(entry_date) <= datetime(:end_dt)
+        ORDER BY datetime(entry_date) ASC
         """
     )
     with DataLogSession() as s:
-        rows = s.execute(sql, {"start_dt": start_dt, "end_dt": end_dt}).all()
+        rows = s.execute(sql, {"start_dt": start_dt.isoformat(timespec="seconds"),
+                               "end_dt": end_dt.isoformat(timespec="seconds")}).all()
         out: List[PositionOut] = []
-        for (symbol, trade_date, price, change_pct, volume, direction) in rows:
-            if isinstance(trade_date, str):
-                trade_date = _parse_dt(trade_date)
+        for (symbol, signal_type, entry_date, entry_price, exit_date, exit_price, change_pct) in rows:
             out.append(PositionOut(
                 symbol=symbol,
-                trade_date=trade_date,
-                price=price,
+                signal_type=signal_type,
+                entry_date=_parse_dt(entry_date) or dt.datetime.utcnow(),
+                entry_price=entry_price,
+                exit_date=_parse_dt(exit_date),
+                exit_price=exit_price,
                 change_pct=change_pct,
-                volume=volume,
-                direction=direction,
             ))
         return out
 
@@ -198,20 +231,3 @@ async def ws_endpoint(ws: WebSocket, token: Optional[str] = Query(default=None))
             await ws.close()
         except Exception:
             pass
-
-
-# --------------
-# פונקציות עזר
-# --------------
-def _parse_dt(value: str) -> dt.datetime:
-    """
-    המרה סלחנית ממחרוזת datetime לשדה datetime.
-    תומך ב-ISO בסיסי ובפורמט 'YYYY-MM-DD HH:MM:SS'.
-    """
-    try:
-        return dt.datetime.fromisoformat(value)
-    except Exception:
-        try:
-            return dt.datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
-        except Exception:
-            return dt.datetime.utcnow()
