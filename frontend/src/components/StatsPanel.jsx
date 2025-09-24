@@ -31,7 +31,6 @@ export default function StatsPanel({ apiBase }) {
     e.preventDefault()
     setError(''); setLoading(true); setSeries([]); setSummary(null); setHoverIdx(null)
     try {
-      // מושך לפי entry_date (כך ה־backend מוגדר)
       const res = await fetch(`${API_BASE}/positions/by-range?start=${encodeURIComponent(start)}`)
       if (!res.ok) throw new Error(`API error ${res.status}`)
       const rows = await res.json()
@@ -41,27 +40,28 @@ export default function StatsPanel({ apiBase }) {
         return
       }
 
-      // ממיין לפי entry_date
-      rows.sort((a,b) => new Date(a.entry_date) - new Date(b.entry_date))
+      // ------- שינוי עיקרי 1: שימוש בשמות שדות חדשים/ישנים + פרסור עמיד -------
+      const getEntryTs = (r) => r.entry_time ?? r.entry_date ?? r.trade_date ?? null
+      const getExitTs  = (r) => r.exit_time  ?? r.exit_date  ?? null
 
-      // מחשב שינוי לכל פוזיציה:
-      // 1) אם יש change_pct → משתמש בו
-      // 2) אחרת, אם יש entry_price ו-exit_price → מחשב (exit-entry)/entry
-      // 3) אחרת 0 (למשל טרייד פתוח)
+      // מיין לפי זמן כניסה (עמיד לפורמטים שונים)
+      rows.sort((a, b) => +parseTs(getEntryTs(a)) - +parseTs(getEntryTs(b)))
+
+      // חישוב שינוי לכל פוזיציה
       const getChange = (r) => {
         if (isFiniteNum(r.change_pct)) return Number(r.change_pct) / 100
-        if (isFiniteNum(r.entry_price) && isFiniteNum(r.exit_price)) {
-          const e = Number(r.entry_price), x = Number(r.exit_price)
-          if (e !== 0) return (x - e) / e
+        const e = r.entry_price, x = r.exit_price
+        if (isFiniteNum(e) && isFiniteNum(x) && Number(e) !== 0) {
+          return (Number(x) - Number(e)) / Number(e)
         }
         return 0
       }
 
-      // Allocation mode (A): בכל טרייד מסכנים risk% מההון הנוכחי
+      // Allocation mode (A): מסכנים risk% מההון בכל טרייד
       let cur = Number(capital), risk = Math.max(0, Number(riskPct)) / 100
       const pts = []
       for (const r of rows) {
-        const t = new Date(r.entry_date)  // נקודת הזמן היא תאריך הכניסה
+        const t = parseTs(getEntryTs(r)) // ← נקודת הזמן היא תאריך הכניסה, עם פרסור קשיח
         const change = getChange(r)
         const pnl = (cur * risk) * change
         cur += pnl
@@ -138,7 +138,12 @@ export default function StatsPanel({ apiBase }) {
           gap:12, alignItems:'end'
         }}>
           <Field label="תאריך התחלה">
-            <input type="datetime-local" value={localDateTimeForInput(start)} onChange={e=>setStart(toISOFromLocalInput(e.target.value))} className="input"/>
+            <input
+              type="datetime-local"
+              value={localDateTimeForInput(start)}
+              onChange={e=>setStart(toISOFromLocalInput(e.target.value))}
+              className="input"
+            />
           </Field>
           <Field label="סכום תיק (₪)">
             <input type="number" min="0" step="100" value={capital} onChange={e=>setCapital(e.target.value)} className="input" placeholder="10000"/>
@@ -190,6 +195,30 @@ function toISOFromLocalInput(s){ return s ? s + ':00' : '' }
 function fmtCurrency(v){ if(!isFinite(v))return'-'; return new Intl.NumberFormat('he-IL',{style:'currency',currency:'ILS',maximumFractionDigits:2}).format(Number(v)) }
 function fmtPct(v){ if(!isFinite(v))return'-'; const n=Number(v); return (n>0?'+':'')+n.toFixed(2)+'%' }
 function isFiniteNum(x){ return x !== null && x !== '' && Number.isFinite(Number(x)) }
+
+/** פרסור עמיד לתאריכים שמגיעים מה-API:
+ * מקבל:
+ *  - מספר (שניות/מילי-שניות מאז epoch)
+ *  - "YYYY-MM-DD HH:MM[:SS]"  ← מחליף רווח ב-"T" ומוסיף שניות אם חסר
+ *  - "YYYY-MM-DDTHH:MM[:SS]"
+ */
+function parseTs(v){
+  if (!v && v !== 0) return new Date(NaN)
+  if (v instanceof Date) return v
+  // מספר? שניות או מילי־שניות
+  if (typeof v === 'number' || (/^\d+$/.test(String(v)))) {
+    const n = Number(v)
+    return new Date(n < 1e12 ? n * 1000 : n)
+  }
+  let s = String(v).trim()
+  if (!s) return new Date(NaN)
+  // להחליף רווח ל-T
+  if (s.includes(' ') && !s.includes('T')) s = s.replace(' ', 'T')
+  // אם אין שניות – להוסיף
+  const timePart = s.split('T')[1] || ''
+  if (timePart && timePart.length <= 5) s = s + ':00'
+  return new Date(s)
+}
 
 // ===== Chart (works in CSS units; DPR handled by context transform) =====
 function drawChart(canvas, series, hoverIdx=null){
