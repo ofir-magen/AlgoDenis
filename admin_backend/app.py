@@ -30,27 +30,27 @@ JWT_EXPIRE_MIN = int(os.getenv("ADMIN_JWT_EXPIRE_MIN", "240"))
 SETTINGS_FILE_PATH = os.getenv("SETTINGS_FILE_PATH", "db/settings.json")
 
 # -------------------------------------------------------
-# RESOLVERS — כמו USERS, גם ל-DataLog באותה שיטה (sqlite:///..)
+# RESOLVERS — build absolute sqlite URLs from relative env paths
 # -------------------------------------------------------
 def _resolve_sqlite_url_from_env_var(env_key: str, example_rel: str) -> str:
     """
-    מצפה למשתנה סביבה בפורמט:
+    Expects an env var value like:
       sqlite:///../backend/Users.db
-    ומחזיר URL מלא עם נתיב מוחלט, יחסית למיקום app.py.
-    * תומך אך ורק ב-sqlite:/// (נתיב יחסי).
+    Returns an absolute sqlite URL relative to this app.py location.
+    Supports only sqlite:/// scheme.
     """
     raw = (os.getenv(env_key) or "").strip()
     if not raw:
         raise RuntimeError(f"{env_key} is missing in .env (expected 'sqlite:///{example_rel}').")
     if not raw.startswith("sqlite:///"):
         raise RuntimeError(f"{env_key} must start with 'sqlite:///' and be relative like '{example_rel}'.")
-    rel = raw[len("sqlite:///"):]            # ../backend/Users.db
+    rel = raw[len("sqlite:///"):]            # e.g. ../backend/Users.db
     here = Path(__file__).resolve().parent
     abs_path = (here / rel).resolve()
     abs_path.parent.mkdir(parents=True, exist_ok=True)
     return f"sqlite:///{abs_path.as_posix()}"
 
-# שני ה-DBs באותה צורה בדיוק
+# Two DBs (Users and DataLog)
 USERS_DB_URL   = _resolve_sqlite_url_from_env_var("USERS_DB_PATH",   "../backend/Users.db")
 DATALOG_DB_URL = _resolve_sqlite_url_from_env_var("DATA_LOG_PATH",   "../backend/DataLog.db")
 
@@ -73,9 +73,8 @@ datalog_engine = create_engine(
 DataLogSession = sessionmaker(bind=datalog_engine, autoflush=False, autocommit=False, future=True)
 datalog_meta = MetaData()
 
-# אם הטבלה לא קיימת (לדוגמה בפרויקט נקי) – ניצור סכימה מינימלית מתועדת
+# If table datalog does not exist, create a minimal schema
 with datalog_engine.begin() as conn:
-    # בדיקה אם קיימת טבלה בשם datalog
     exists = conn.exec_driver_sql(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='datalog';"
     ).fetchone()
@@ -102,7 +101,7 @@ app = FastAPI(title="Admin API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],    # לצמצם בפרודקשן
+    allow_origins=["*"],    # tighten in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -175,7 +174,7 @@ def parse_dt(value: Any) -> Optional[dt.datetime]:
         "%d/%m/%Y,%H:%M",
         "%d/%m/%Y, %H:%M",
         "%d.%m.%Y %H:%M",
-        "%d-%m-%Y %H:%מ",
+        "%d-%m-%Y %H:%M",
     ]
     for f in fmts:
         try:
@@ -197,7 +196,7 @@ def row_to_dict(row) -> Dict[str, Any]:
     return d
 
 def _calc_change_pct(entry_price, exit_price) -> Optional[float]:
-    """חישוב שינוי % לפי מחיר כניסה/יציאה; מחזיר None אם לא ניתן לחשב."""
+    """Compute % change based on entry/exit prices; returns None if not computable."""
     try:
         a = float(entry_price)
         b = float(exit_price)
@@ -206,6 +205,22 @@ def _calc_change_pct(entry_price, exit_price) -> Optional[float]:
         return ((b - a) / a) * 100.0
     except Exception:
         return None
+
+# ---- plan helpers (for user approvals) ----
+def _normalize_plan(v: Optional[str]) -> str:
+    if not v:
+        return "monthly"
+    p = str(v).strip().lower()
+    if p in ("year", "yearly", "annual", "שנתי"):
+        return "yearly"
+    if p in ("pro",):
+        return "pro"
+    if p in ("basic",):
+        return "basic"
+    return "monthly"
+
+def _period_days(plan_norm: str) -> int:
+    return 365 if plan_norm == "yearly" else 30
 
 # ================== Schemas ==================
 class LoginIn(BaseModel):
@@ -262,6 +277,14 @@ def list_users(_: str = Depends(require_auth)):
 
 @app.put("/api/users/{user_id}")
 async def update_user(user_id: int, request: Request, _: str = Depends(require_auth)):
+    """
+    Generic update for users.
+    If 'approved' changes from False/NULL to True, we:
+      - compute stacking with previous active subscription (if any)
+      - set period_start accordingly (either now, or previous active_until)
+      - set active_until = period_start + plan period
+      - set status = 'active'
+    """
     raw = await request.json()
     payload: Dict[str, Any] = raw.get("data") if isinstance(raw, dict) and "data" in raw else raw
     if not isinstance(payload, dict):
@@ -271,6 +294,14 @@ async def update_user(user_id: int, request: Request, _: str = Depends(require_a
     IMMUTABLE = {"id", "created_at", "updated_at", "password_hash"}
     clean: Dict[str, Any] = {}
 
+    # Load current row to compare approval / plan
+    with UsersSession() as db:
+        cur_row = db.execute(select(users).where(users.c.id == user_id)).first()
+        if not cur_row:
+            raise HTTPException(status_code=404, detail="User not found")
+        cur = dict(cur_row._mapping)
+
+    # Type conversions
     for k, v in payload.items():
         if k in IMMUTABLE or k not in cols:
             continue
@@ -284,12 +315,63 @@ async def update_user(user_id: int, request: Request, _: str = Depends(require_a
         else:
             clean[k] = v
 
+    # Touch updated_at if exists
     if "updated_at" in cols:
         clean["updated_at"] = dt.datetime.utcnow()
 
     if not clean:
         raise HTTPException(status_code=400, detail="No updatable fields provided")
 
+    # If approved becomes True now → set period_start/active_until/status (with stacking)
+    becoming_approved = None
+    if "approved" in clean:
+        new_approved = bool(clean["approved"])
+        old_approved = bool(cur.get("approved") or False)
+        becoming_approved = (not old_approved) and new_approved
+
+    if becoming_approved:
+        # Normalize plan for the NEW row being approved
+        new_plan = clean.get("plan", cur.get("plan"))
+        plan_norm = _normalize_plan(new_plan)
+        days = _period_days(plan_norm)
+
+        now_utc = dt.datetime.utcnow().replace(microsecond=0)
+
+        # ---- STACKING LOGIC ----
+        # Find the latest APPROVED row for same email (not this row) that has active_until set,
+        # and prefer the one with the latest active_until.
+        with UsersSession() as db2:
+            prev = db2.execute(
+                select(users)
+                .where(
+                    (users.c.email == cur.get("email")) &
+                    (users.c.id != user_id) &
+                    (users.c.approved == True) &
+                    (users.c.active_until.is_not(None))
+                )
+                .order_by(users.c.active_until.desc())
+                .limit(1)
+            ).first()
+
+        # Default start: now
+        start = now_utc
+        if prev:
+            prev_end = prev._mapping.get("active_until")
+            try:
+                prev_end_dt = prev_end if isinstance(prev_end, dt.datetime) else parse_dt(prev_end)
+            except Exception:
+                prev_end_dt = None
+
+            # If previous subscription still active → start after it ends
+            if prev_end_dt and prev_end_dt > now_utc:
+                start = prev_end_dt.replace(microsecond=0)
+
+        clean["plan"] = plan_norm
+        clean["status"] = "active"
+        clean["period_start"] = start
+        clean["active_until"] = start + dt.timedelta(days=days)
+
+    # Apply update
     with UsersSession() as db:
         stmt = update(users).where(users.c.id == user_id).values(**clean)
         r = db.execute(stmt)
@@ -308,12 +390,21 @@ def delete_user(user_id: int, _: str = Depends(require_auth)):
         db.commit()
         return {"ok": True, "deleted": user_id}
 
-# -------- DataLog (CRUD + create עם assigned='admin' ו־change_pct מחושב) --------
+# -------- DataLog (CRUD + create with assigned='admin' & computed change_pct) --------
 @app.get("/api/datalog")
 def datalog_list(_: str = Depends(require_auth)):
     with DataLogSession() as db:
         res = db.execute(select(datalog).order_by(datalog.c.id.asc()))
         return [row_to_dict(r) for r in res.fetchall()]
+
+class DataLogCreateIn(BaseModel):
+    symbol: str
+    signal_type: Optional[str] = None
+    entry_time: Optional[str] = None
+    entry_price: Optional[float] = None
+    exit_time: Optional[str] = None
+    exit_price: Optional[float] = None
+    change_pct: Optional[float] = None
 
 @app.post("/api/datalog")
 def datalog_create(body: DataLogCreateIn, _: str = Depends(require_auth)):
@@ -333,7 +424,7 @@ def datalog_create(body: DataLogCreateIn, _: str = Depends(require_auth)):
         "exit_time": (body.exit_time or None),
         "exit_price": (body.exit_price if body.exit_price is not None else None),
         "change_pct": change_pct,
-        "assigned": "admin",           # ← מקור הערך מה־Admin
+        "assigned": "admin",
         "created_at": now,
         "updated_at": now,
     }
@@ -367,12 +458,11 @@ async def datalog_update(row_id: int, request: Request, _: str = Depends(require
         else:
             clean[k] = v
 
-    # אם לא סופק change_pct ויש מחירי כניסה/יציאה - נחשב
+    # compute change_pct if not provided and prices are available
     if ("change_pct" not in clean or clean["change_pct"] in (None, "")) and (
         ("entry_price" in clean and clean["entry_price"] not in (None, "")) or
         ("exit_price" in clean and clean["exit_price"] not in (None, ""))
     ):
-        # נשלוף את הערכים הקיימים לשילוב עם החדשים
         with DataLogSession() as db:
             cur = db.execute(select(datalog).where(datalog.c.id == row_id)).first()
             if not cur:

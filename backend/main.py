@@ -1,4 +1,3 @@
-# main.py
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -17,6 +16,7 @@ from auth import router as auth_router, verify_jwt
 # SQLAlchemy
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool  # <<< חשוב ל-SQLite
 
 # ---------- DB ----------
 # ניתן לקנפג ב-.env: DATA_LOG_URL=sqlite:///./DataLog.db
@@ -24,6 +24,7 @@ DATA_LOG_URL = os.getenv("DATA_LOG_URL", "sqlite:///./DataLog.db")
 
 Engine = create_engine(
     DATA_LOG_URL,
+    poolclass=NullPool if DATA_LOG_URL.startswith("sqlite") else None,  # <<< בלי pooling ב-SQLite
     connect_args={"check_same_thread": False} if DATA_LOG_URL.startswith("sqlite") else {},
 )
 SessionLocal = sessionmaker(bind=Engine, autoflush=False, autocommit=False)
