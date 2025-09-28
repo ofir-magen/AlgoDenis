@@ -51,57 +51,63 @@ export default function AccountPage() {
     return () => { abort = true }
   }, [API_BASE, token, navigate])
 
-  const latest = subs && subs.length > 0 ? subs[0] : null
+  // --- מצבים ---
+  const active = isActive(me?.active_until)
+  const hasPendingAwaitingAdmin = useMemo(
+    () => Array.isArray(subs) && subs.some(s => String(s?.status || '').toLowerCase() === 'pending'),
+    [subs]
+  )
 
-  const derivedStatus = useMemo(() => {
-    const now = new Date()
-    if (latest) {
-      if (!latest.start_at || !latest.end_at) return 'pending'
-      try { return new Date(latest.end_at) > now ? 'active' : 'expired' } catch { return 'pending' }
+  // UI state לפי הדרישות:
+  const ui = useMemo(() => {
+    if (hasPendingAwaitingAdmin) {
+      return { status: 'ממתין לאישור אדמין', canBuy: false, hint: 'ממתין לאישור אדמין' }
     }
-    if (!me?.active_until) return 'pending'
-    try { return new Date(me.active_until) > now ? 'active' : 'expired' } catch { return 'pending' }
-  }, [latest, me])
+    if (active) {
+      return { status: 'פעיל', canBuy: true, hint: '' }
+    }
+    return { status: 'פג תוקף', canBuy: true, hint: 'המנוי לא פעיל — יש להשלים תשלום.' }
+  }, [hasPendingAwaitingAdmin, active])
 
-  const latestEndISO = latest?.end_at || me?.active_until || null
-  const remainingDays = useMemo(() => {
-    if (!latestEndISO) return null
-    try {
-      const now = new Date()
-      const end = new Date(latestEndISO)
-      const diffMs = end.getTime() - now.getTime()
-      if (diffMs <= 0) return 0
-      const dayMs = 1000 * 60 * 60 * 24
-      return Math.ceil(diffMs / dayMs)
-    } catch { return null }
-  }, [latestEndISO])
+  // ימים שנותרו (רק אם פעיל)
+  const daysLeft = active ? remainingDays(me?.active_until) : null
 
-  const derivedActive = derivedStatus === 'active'
-  const statusLabel =
-    derivedStatus === 'active'  ? 'פעיל' :
-    derivedStatus === 'pending' ? 'ממתין לאישור' :
-                                  'לא פעיל / פג תוקף'
-
+  // --- רכישה/חידוש ---
   async function renew() {
     if (!token) return
-    if (derivedActive) {
-      const ok = window.confirm(
-        'המנוי שלך עדיין פעיל. האם אתה בטוח שברצונך לרכוש מנוי נוסף?\n' +
-        'לאחר אישור אדמין, הזמן הנותר במנוי הנוכחי יתווסף לתוקף החדש.'
-      )
+
+    // אם יש ממתין – אל תבצע כלום (רק התראה)
+    if (hasPendingAwaitingAdmin) {
+      alert('יש הזמנה ממתינה לאישור אדמין. לא ניתן לבצע רכישה נוספת כרגע.')
+      return
+    }
+
+    // אם פעיל – בקש אישור לצבירה
+    if (active) {
+      const ok = confirm('יש לך מנוי פעיל. האם להמשיך ולרכוש מנוי נוסף? (הזמן הנותר יצטבר)')
       if (!ok) return
     }
+
     setRenewBusy(true); setError('')
     try {
       const res = await fetch(`${API_BASE}/subscriptions/renew`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({ plan }),
       })
-      if (!res.ok) throw new Error(await res.text())
+      if (!res.ok) {
+        if (res.status === 409) {
+          alert('יש הזמנה ממתינה לאישור אדמין. לא ניתן לבצע רכישה נוספת כרגע.')
+          return
+        }
+        const t = await res.text().catch(() => '')
+        alert(t || `שגיאת שרת (${res.status})`)
+        return
+      }
       navigate('/pay', { replace: true })
-    } catch (e) {
-      setError(parseErr(e))
     } finally {
       setRenewBusy(false)
     }
@@ -133,22 +139,13 @@ export default function AccountPage() {
 
               <div className="glass" style={{ padding:16 }}>
                 <div style={{ display:'grid', gap:10, gridTemplateColumns: 'repeat(3, minmax(180px, 1fr))' }}>
-                  <Info label="סטטוס">{statusLabel}</Info>
+                  <Info label="סטטוס">{ui.status}</Info>
                   <Info label="תוקף">
-                    {fmtDate(latestEndISO)}
-                    {derivedStatus === 'active' && typeof remainingDays === 'number' && (
-                      <span style={{ marginInlineStart: 8, opacity:.85 }}>
-                        (נשארו {remainingDays} ימים)
-                      </span>
-                    )}
+                    {fmtDateOnly(me?.active_until)}
+                    {daysLeft != null ? `  (נשארו ${daysLeft} ימים)` : ''}
                   </Info>
                   <Info label="קופון">{me?.coupon || '—'}</Info>
                 </div>
-                {derivedStatus === 'pending' && (
-                  <div className="auth-hint" style={{ marginTop: 8 }}>
-                    החשבון ממתין לאישור אדמין. מרגע האישור התוקף יתחיל להיספר בהתאם לתוכנית.
-                  </div>
-                )}
               </div>
             </section>
 
@@ -158,23 +155,19 @@ export default function AccountPage() {
               <div className="glass" style={{ padding:16, display:'grid', gap:12 }}>
                 <div style={{ display:'flex', flexWrap:'wrap', gap:12 }}>
                   <PlanRadio value="monthly" label="חודשי (30 יום)" plan={plan} setPlan={setPlan} />
-                  <PlanRadio value="yearly" label="שנתי (365 יום)" plan={plan} setPlan={setPlan} />
-                  <PlanRadio value="pro" label="Pro (חודשי)" plan={plan} setPlan={setPlan} />
+                  <PlanRadio value="yearly"  label="שנתי (365 יום)" plan={plan} setPlan={setPlan} />
+                  <PlanRadio value="pro"      label="Pro (חודשי)"  plan={plan} setPlan={setPlan} />
                 </div>
                 <div>
-                  <button className="btn btn--primary" disabled={renewBusy} onClick={renew}>
-                    {renewBusy ? 'יוצר חיוב…' : (derivedActive ? 'רכש מנוי נוסף' : 'רכש/חדש מנוי')}
+                  <button
+                    className="btn btn--primary"
+                    disabled={renewBusy || !ui.canBuy}
+                    onClick={renew}
+                    title={!ui.canBuy ? 'ממתין לאישור אדמין' : undefined}
+                  >
+                    {renewBusy ? 'יוצר חיוב…' : (active ? 'חדש מנוי' : 'רכש/חדש מנוי')}
                   </button>
-                  {!derivedActive && derivedStatus === 'expired' && (
-                    <span className="auth-hינט" style={{ marginInlineStart: 12 }}>
-                      המנוי לא פעיל — יש להשלים תשלום.
-                    </span>
-                  )}
-                  {derivedStatus === 'pending' && (
-                    <span className="auth-hint" style={{ marginInlineStart: 12 }}>
-                      ממתין לאישור אדמין. התוקף יתחיל מרגע האישור.
-                    </span>
-                  )}
+                  {ui.hint && <span className="auth-hint" style={{ marginInlineStart: 12 }}>{ui.hint}</span>}
                 </div>
               </div>
             </section>
@@ -202,8 +195,8 @@ export default function AccountPage() {
                         <Td>{labelPlan(r.plan)}</Td>
                         <Td>{r.coupon || '—'}</Td>
                         <Td align="right">{fmtNum(r.price_nis)}</Td>
-                        <Td>{fmtDate(r.start_at)}</Td>
-                        <Td>{fmtDate(r.end_at)}</Td>
+                        <Td>{fmtDateOnly(r.start_at)}</Td>
+                        <Td>{fmtDateOnly(r.end_at)}</Td>
                         <Td>{labelStatus(r.status)}</Td>
                       </tr>
                     ))}
@@ -263,8 +256,35 @@ function Td({ children, align='start', tone, mono, dim, colSpan }) {
     }}>{children}</td>
   )
 }
+
+// -------- helpers --------
 function labelPlan(p){ const v=String(p||'').toLowerCase(); if(v==='monthly')return'חודשי'; if(v==='yearly')return'שנתי'; if(v==='pro')return'Pro'; if(v==='basic')return'Basic'; return p||'—' }
 function labelStatus(s){ const v=String(s||'').toLowerCase(); if(v==='active')return'פעיל'; if(v==='pending')return'ממתין'; if(v==='canceled')return'בוטל'; return s||'—' }
-function fmtDate(v){ if(!v)return'—'; try{ return new Date(v).toLocaleDateString('he-IL') }catch{ return String(v) } }
+
+function fmtDateOnly(v){
+  if(!v) return '—'
+  try{
+    const d = new Date(v)
+    if(Number.isNaN(d.getTime())) return String(v)
+    return d.toLocaleDateString('he-IL', { year:'numeric', month:'2-digit', day:'2-digit' })
+  }catch{
+    return String(v)
+  }
+}
+
 function fmtNum(v){ return (v==null || v==='') ? '—' : Number(v).toFixed(2) }
+function isActive(activeUntil){ if(!activeUntil) return false; try{ return new Date(activeUntil) > new Date() }catch{return false} }
 function parseErr(e){ try{ const t = typeof e === 'string' ? e : (e.message || String(e)); const j = JSON.parse(t); return j.detail || t } catch { return e.message || String(e) } }
+
+function remainingDays(activeUntil){
+  if(!activeUntil) return null
+  try{
+    const end = new Date(activeUntil)
+    const now = new Date()
+    const ms = end.getTime() - now.getTime()
+    if (ms <= 0) return 0
+    return Math.floor(ms / (1000*60*60*24))
+  }catch{
+    return null
+  }
+}
