@@ -195,6 +195,12 @@ def row_to_dict(row) -> Dict[str, Any]:
             d[k] = v.strftime("%Y-%m-%d %H:%M:%S")
     return d
 
+def _is_finite_number(x) -> bool:
+    try:
+        return x is not None and x != "" and float(x) == float(x)
+    except Exception:
+        return False
+
 def _calc_change_pct(entry_price, exit_price) -> Optional[float]:
     """Compute % change based on entry/exit prices; returns None if not computable."""
     try:
@@ -338,8 +344,6 @@ async def update_user(user_id: int, request: Request, _: str = Depends(require_a
         now_utc = dt.datetime.utcnow().replace(microsecond=0)
 
         # ---- STACKING LOGIC ----
-        # Find the latest APPROVED row for same email (not this row) that has active_until set,
-        # and prefer the one with the latest active_until.
         with UsersSession() as db2:
             prev = db2.execute(
                 select(users)
@@ -362,7 +366,6 @@ async def update_user(user_id: int, request: Request, _: str = Depends(require_a
             except Exception:
                 prev_end_dt = None
 
-            # If previous subscription still active → start after it ends
             if prev_end_dt and prev_end_dt > now_utc:
                 start = prev_end_dt.replace(microsecond=0)
 
@@ -393,9 +396,27 @@ def delete_user(user_id: int, _: str = Depends(require_auth)):
 # -------- DataLog (CRUD + create with assigned='admin' & computed change_pct) --------
 @app.get("/api/datalog")
 def datalog_list(_: str = Depends(require_auth)):
+    """Return rows with a guaranteed correct change_pct derived from prices when available."""
     with DataLogSession() as db:
         res = db.execute(select(datalog).order_by(datalog.c.id.asc()))
-        return [row_to_dict(r) for r in res.fetchall()]
+        out = []
+        for r in res.fetchall():
+            d = row_to_dict(r)
+            ep = d.get("entry_price")
+            xp = d.get("exit_price")
+            recomputed = _calc_change_pct(ep, xp) if _is_finite_number(ep) and _is_finite_number(xp) else None
+            if recomputed is not None:
+                d["change_pct"] = round(float(recomputed), 6)
+            else:
+                # clean user-provided pct: if looks like fraction (-1..1 but not 0), treat as percent
+                cp = d.get("change_pct")
+                if _is_finite_number(cp):
+                    v = float(cp)
+                    d["change_pct"] = round(v*100.0, 6) if -1.0 < v < 1.0 and v != 0.0 else round(v, 6)
+                else:
+                    d["change_pct"] = 0.0
+            out.append(d)
+        return out
 
 class DataLogCreateIn(BaseModel):
     symbol: str
@@ -410,11 +431,20 @@ class DataLogCreateIn(BaseModel):
 def datalog_create(body: DataLogCreateIn, _: str = Depends(require_auth)):
     now = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
-    change_pct = body.change_pct
-    if change_pct is None and body.entry_price is not None and body.exit_price is not None:
+    # Always prefer computing from prices when available
+    change_pct = None
+    if _is_finite_number(body.entry_price) and _is_finite_number(body.exit_price):
         calc = _calc_change_pct(body.entry_price, body.exit_price)
         if calc is not None:
             change_pct = round(calc, 6)
+    else:
+        # If only change_pct provided, normalize it (fraction → percent)
+        if body.change_pct is not None:
+            try:
+                v = float(body.change_pct)
+                change_pct = round(v*100.0, 6) if -1.0 < v < 1.0 and v != 0.0 else round(v, 6)
+            except Exception:
+                change_pct = None
 
     values = {
         "symbol": (body.symbol or "").strip(),
@@ -458,21 +488,29 @@ async def datalog_update(row_id: int, request: Request, _: str = Depends(require
         else:
             clean[k] = v
 
-    # compute change_pct if not provided and prices are available
-    if ("change_pct" not in clean or clean["change_pct"] in (None, "")) and (
-        ("entry_price" in clean and clean["entry_price"] not in (None, "")) or
-        ("exit_price" in clean and clean["exit_price"] not in (None, ""))
-    ):
-        with DataLogSession() as db:
-            cur = db.execute(select(datalog).where(datalog.c.id == row_id)).first()
-            if not cur:
-                raise HTTPException(status_code=404, detail="Row not found")
-            cur_d = row_to_dict(cur)
-            ep = clean.get("entry_price", cur_d.get("entry_price"))
-            xp = clean.get("exit_price",  cur_d.get("exit_price"))
-            calc = _calc_change_pct(ep, xp)
-            if calc is not None:
-                clean["change_pct"] = round(calc, 6)
+    # Merge with current to decide how to compute pct
+    with DataLogSession() as db:
+        cur = db.execute(select(datalog).where(datalog.c.id == row_id)).first()
+        if not cur:
+            raise HTTPException(status_code=404, detail="Row not found")
+        cur_d = row_to_dict(cur)
+
+    ep = clean.get("entry_price", cur_d.get("entry_price"))
+    xp = clean.get("exit_price",  cur_d.get("exit_price"))
+
+    # Prefer computing from prices when available, override any provided pct
+    if _is_finite_number(ep) and _is_finite_number(xp):
+        calc = _calc_change_pct(ep, xp)
+        if calc is not None:
+            clean["change_pct"] = round(calc, 6)
+    else:
+        # If no prices to compute from, normalize user-provided pct if exists
+        if "change_pct" in clean and clean["change_pct"] not in (None, ""):
+            try:
+                v = float(clean["change_pct"])
+                clean["change_pct"] = round(v*100.0, 6) if -1.0 < v < 1.0 and v != 0.0 else round(v, 6)
+            except Exception:
+                pass
 
     clean["updated_at"] = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
