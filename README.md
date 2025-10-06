@@ -107,15 +107,34 @@ python main.py
 
 ---
 
-## 6) Run Services with tmux (Recommended)
+## 6) Affil - Front
 
 ```bash
+npm run dev -- --host --port 5180
+```
+
+---
+
+## 7) Affil - Beck
+
+```bash
+uvicorn main:app --host 0.0.0.0 --port 8020
+```
+
+---
+
+## 8) Run Services with tmux (Recommended)
+
+```bash
+
 tmux new -ds api-main   'cd ~/main_algo/AlgoDenis/backend && source .venv/bin/activate && uvicorn main:app --host 0.0.0.0 --port 8000'
 tmux new -ds api-admin  'cd ~/main_algo/AlgoDenis/admin_backend && source .venv/bin/activate && uvicorn app:app --host 0.0.0.0 --port 8010'
 tmux new -ds fe-admin   'cd ~/main_algo/AlgoDenis/admin_frontend && npm run dev -- --host --port 5174'
 tmux new -ds fe-main    'cd ~/main_algo/AlgoDenis/frontend && npm run dev -- --host --port 5173'
+tmux new -ds fe-aff     'cd ~/main_algo/AlgoDenis/affiliate-react-min/frontend && npm run dev -- --host --port 5180'
 tmux new -ds tg-worker  'cd ~/main_algo/AlgoDenis/telegram-ai-worker && source .venv/bin/activate && python main.py'
 tmux ls
+
 ```
 
 ---
