@@ -19,9 +19,10 @@
 #   USERS_COUPON_COL=coupon
 
 import os
+import re
 import sqlite3
 from datetime import datetime, timedelta
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from pathlib import Path
 
 from fastapi import Header
@@ -77,7 +78,7 @@ USERS_DB_PATH = _normalize_db_uri_to_path(USERS_DB_URI)
 # ---- Affiliate/Coupons settings ----
 COUPONS_DB_URI      = os.getenv("COUPONS_DB_PATH", USERS_DB_URI)  # default: same DB as users unless set
 COUPONS_TABLE       = os.getenv("COUPONS_TABLE", "coupons")
-COUPON_CODE_COL     = os.getenv("COUPON_CODE_COL", "coupon")          # <-- you renamed this
+COUPON_CODE_COL     = os.getenv("COUPON_CODE_COL", "coupon")
 PARTNER_EMAIL_COL   = os.getenv("PARTNER_EMAIL_COL", "affiliator_mail")
 USERS_COUPON_COL    = os.getenv("USERS_COUPON_COL", "coupon")
 COUPONS_DB_PATH     = _normalize_db_uri_to_path(COUPONS_DB_URI)
@@ -106,6 +107,7 @@ class DashboardData(BaseModel):
 
 # ---------- Helpers ----------
 def _is_active_value(v) -> bool:
+    """Decide if a DB value counts as 'active'."""
     if v is None:
         return False
     s = str(v).strip().lower()
@@ -212,7 +214,7 @@ def _get_all_coupons() -> List[str]:
         con = sqlite3.connect(COUPONS_DB_PATH)
         cur = con.cursor()
         x = f"SELECT {COUPON_CODE_COL} FROM {COUPONS_TABLE}"
-        print("xxxxxxxxxxxxx ",x)
+        print("xxxxxxxxxxxxx ", x)
         cur.execute(f"SELECT {COUPON_CODE_COL} FROM {COUPONS_TABLE}")
         rows = cur.fetchall()
         coupons = [str(r[0]).strip() for r in rows if r and r[0] is not None and str(r[0]).strip()]
@@ -245,6 +247,101 @@ def _get_partner_coupons(partner_email: str) -> List[str]:
     finally:
         try: con.close()
         except Exception: pass
+
+def _users_for_partner_by_coupons(partner_email: str) -> List[Dict[str, Any]]:
+    """Fetch all users whose coupon is one of the partner's coupons."""
+    coupons = _get_partner_coupons(partner_email)
+    if not coupons:
+        return []
+    placeholders = ",".join("?" for _ in coupons)
+    q = f"SELECT * FROM {USERS_TABLE} WHERE {USERS_COUPON_COL} IN ({placeholders})"
+    con = None
+    try:
+        con = sqlite3.connect(USERS_DB_PATH)
+        return _fetchall_dicts(con, q, tuple(coupons))
+    except Exception as e:
+        print(f"[ERROR] _users_for_partner_by_coupons failed: {e}")
+        return []
+    finally:
+        try: con.close()
+        except Exception: pass
+
+# ---------- Date parsing helpers for metrics ----------
+POSSIBLE_DATE_COLS = [
+    # Prefer explicit payment columns
+    "paid_at", "payment_date", "last_payment_at", "last_payment", "charged_at",
+    # Common signup/creation columns as fallback
+    "created_at", "signup_date", "registered_at", "created", "Date", "date"
+]
+
+def _get_existing_columns(table: str, db_path: str) -> List[str]:
+    try:
+        con = sqlite3.connect(db_path)
+        cur = con.cursor()
+        cur.execute(f"PRAGMA table_info({table})")
+        rows = cur.fetchall()
+        return [r[1] for r in rows]
+    except Exception:
+        return []
+    finally:
+        try: con.close()
+        except Exception: pass
+
+def _guess_date_column(table: str, db_path: str) -> Optional[str]:
+    cols = set(_get_existing_columns(table, db_path))
+    for c in POSSIBLE_DATE_COLS:
+        if c in cols:
+            return c
+    return None
+
+_ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
+
+def _parse_to_ym(value: Any) -> Optional[str]:
+    """
+    Try to convert many shapes of date/time to 'YYYY-MM'. Returns None if can't parse.
+    """
+    if value is None:
+        return None
+    s = str(value).strip()
+
+    # Already 'YYYY-MM' or 'YYYY-MM-DD...'
+    if _ISO_RE.match(s):
+        try:
+            y, m = s[0:4], s[5:7]
+            int(y); int(m)
+            return f"{y}-{m}"
+        except Exception:
+            pass
+
+    # 'DD/MM/YYYY' or 'DD-MM-YYYY'
+    for sep in ("/", "-"):
+        parts = s.split(sep)
+        if len(parts) == 3 and len(parts[2]) == 4:
+            try:
+                d, m, y = int(parts[0]), int(parts[1]), int(parts[2])
+                return f"{y:04d}-{m:02d}"
+            except Exception:
+                pass
+
+    # Epoch seconds or ms
+    try:
+        num = int(float(s))
+        if num > 10_000_000_000:
+            num = num // 1000  # ms -> s
+        dt = datetime.utcfromtimestamp(num)
+        return dt.strftime("%Y-%m")
+    except Exception:
+        pass
+
+    # Common strptime formats
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            return dt.strftime("%Y-%m")
+        except Exception:
+            continue
+
+    return None
 
 # ---------- Routes ----------
 @app.get("/health")
@@ -283,10 +380,10 @@ def dashboard_aff_users(authorization: Optional[str] = Header(None)):
     Also prints ALL coupons in system to terminal on each call.
     """
     partner_email = decode_access_token(bearer_from_header(authorization))
-    print("ofir_partner_email: ",partner_email)
+    print("ofir_partner_email:", partner_email)
     columns = _get_users_table_columns()
 
-    # 1) Print ALL coupons (your request)
+    # 1) Print ALL coupons (debug/info)
     all_coupons = _get_all_coupons()
     print(f"[INFO] ALL coupons in system ({len(all_coupons)}): {all_coupons}")
 
@@ -302,17 +399,7 @@ def dashboard_aff_users(authorization: Optional[str] = Header(None)):
             "users": [],
         }
 
-    placeholders = ",".join("?" for _ in coupons)
-    q = f"SELECT * FROM {USERS_TABLE} WHERE {USERS_COUPON_COL} IN ({placeholders})"
-    try:
-        con = sqlite3.connect(USERS_DB_PATH)
-        users = _fetchall_dicts(con, q, tuple(coupons))
-    except Exception as e:
-        print(f"[ERROR] Query users by coupons failed: {e}")
-        users = []
-    finally:
-        try: con.close()
-        except Exception: pass
+    users = _users_for_partner_by_coupons(partner_email)
 
     return {
         "partner_email": partner_email,
@@ -320,3 +407,143 @@ def dashboard_aff_users(authorization: Optional[str] = Header(None)):
         "columns": columns,
         "users": users,
     }
+
+# ---------- NEW: Metrics endpoints ----------
+
+class MonthlyPoint(BaseModel):
+    month: str   # 'YYYY-MM'
+    count: int
+
+class MonthlySummaryResponse(BaseModel):
+    partner_email: str
+    coupon_codes: List[str]
+    date_column: Optional[str]
+    points: List[MonthlyPoint]
+
+@app.get("/dashboard/monthly-summary", response_model=MonthlySummaryResponse)
+def monthly_summary(authorization: Optional[str] = Header(None)):
+    """
+    Aggregate counts by month for users who used the partner's coupons.
+    Date column is auto-guessed from POSSIBLE_DATE_COLS.
+    """
+    partner_email = decode_access_token(bearer_from_header(authorization))
+    coupons = _get_partner_coupons(partner_email)
+    date_col = _guess_date_column(USERS_TABLE, USERS_DB_PATH)
+
+    if not coupons:
+        return MonthlySummaryResponse(
+            partner_email=partner_email, coupon_codes=[], date_column=date_col, points=[]
+        )
+
+    users = _users_for_partner_by_coupons(partner_email)
+
+    # aggregate to { 'YYYY-MM': count }
+    buckets: Dict[str, int] = {}
+    for u in users:
+        raw = None
+        if date_col and date_col in u:
+            raw = u.get(date_col)
+        else:
+            # fallback: try to find any of POSSIBLE_DATE_COLS on the row
+            for c in POSSIBLE_DATE_COLS:
+                if c in u and u[c]:
+                    raw = u[c]
+                    break
+        ym = _parse_to_ym(raw)
+        if ym is None:
+            continue
+        buckets[ym] = buckets.get(ym, 0) + 1
+
+    points = [MonthlyPoint(month=k, count=v) for k, v in sorted(buckets.items())]
+    return MonthlySummaryResponse(
+        partner_email=partner_email,
+        coupon_codes=coupons,
+        date_column=date_col,
+        points=points
+    )
+
+class UsersByMonthResponse(BaseModel):
+    month: str
+    columns: List[str]
+    users: List[dict]
+
+@app.get("/dashboard/users-by-month", response_model=UsersByMonthResponse)
+def users_by_month(month: str, authorization: Optional[str] = Header(None)):
+    """
+    Return the concrete users for a given 'YYYY-MM' month (based on the guessed date column).
+    """
+    partner_email = decode_access_token(bearer_from_header(authorization))
+    date_col = _guess_date_column(USERS_TABLE, USERS_DB_PATH)
+    users = _users_for_partner_by_coupons(partner_email)
+
+    filtered: List[dict] = []
+    for u in users:
+        raw = u.get(date_col) if (date_col and date_col in u) else None
+        if raw is None:
+            for c in POSSIBLE_DATE_COLS:
+                if c in u and u[c]:
+                    raw = u[c]
+                    break
+        ym = _parse_to_ym(raw)
+        if ym == month:
+            filtered.append(u)
+
+    columns = _get_users_table_columns()
+    return UsersByMonthResponse(month=month, columns=columns, users=filtered)
+
+class CouponStat(BaseModel):
+    coupon: str
+    count: int
+
+class CouponStatsResponse(BaseModel):
+    partner_email: str
+    stats: List[CouponStat]
+
+@app.get("/dashboard/coupon-stats", response_model=CouponStatsResponse)
+def coupon_stats(authorization: Optional[str] = Header(None)):
+    """
+    Count users per coupon for this partner.
+    """
+    partner_email = decode_access_token(bearer_from_header(authorization))
+    coupons = _get_partner_coupons(partner_email)
+    if not coupons:
+        return {"partner_email": partner_email, "stats": []}
+
+    users = _users_for_partner_by_coupons(partner_email)
+    counter: Dict[str, int] = {}
+    for u in users:
+        c = str(u.get(USERS_COUPON_COL, "") or "").strip()
+        if not c:
+            continue
+        if c in coupons:
+            counter[c] = counter.get(c, 0) + 1
+
+    stats = [CouponStat(coupon=k, count=v) for k, v in sorted(counter.items())]
+    return {"partner_email": partner_email, "stats": stats}
+
+class StatusStatsResponse(BaseModel):
+    field: Optional[str]
+    active_count: int
+    inactive_count: int
+
+@app.get("/dashboard/status-stats", response_model=StatusStatsResponse)
+def status_stats(authorization: Optional[str] = Header(None)):
+    """
+    Count active vs inactive using ACTIVE_COL if defined.
+    If ACTIVE_COL is missing, treat all as active to avoid confusion.
+    """
+    partner_email = decode_access_token(bearer_from_header(authorization))
+    users = _users_for_partner_by_coupons(partner_email)
+
+    if not ACTIVE_COL:
+        return {"field": None, "active_count": len(users), "inactive_count": 0}
+
+    active, inactive = 0, 0
+    for u in users:
+        v = u.get(ACTIVE_COL)
+        if _is_active_value(v):
+            active += 1
+        else:
+            inactive += 1
+
+    return {"field": ACTIVE_COL, "active_count": active, "inactive_count": inactive}
