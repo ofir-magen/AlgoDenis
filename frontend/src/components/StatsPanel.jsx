@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 export default function StatsPanel({ apiBase }) {
   const API_BASE = useMemo(() => {
     if (apiBase) return apiBase.replace(/\/+$/, '')
-    const envUrl = import.meta.env.VITE_API_URL
+    const envUrl = import.meta.env?.VITE_API_URL
     if (envUrl) return envUrl.replace(/\/+$/, '')
     const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:'
     const host = typeof window !== 'undefined' ? window.location.hostname : '127.0.0.1'
@@ -14,12 +14,16 @@ export default function StatsPanel({ apiBase }) {
   // form state
   const [start, setStart] = useState(defaultStartISO())
   const [capital, setCapital] = useState(10000)
+
+  // allocation mode: 'risk' (percent of equity) OR 'fixed' (fixed amount per trade)
+  const [allocMode, setAllocMode] = useState('risk')
   const [riskPct, setRiskPct] = useState(10)
+  const [fixedAmount, setFixedAmount] = useState(1000)
 
   // data + results
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [series, setSeries] = useState([])
+  const [series, setSeries] = useState([]) // [{ t: Date, v: number }]
   const [summary, setSummary] = useState(null)
 
   // chart refs
@@ -27,27 +31,28 @@ export default function StatsPanel({ apiBase }) {
   const chartWrapRef = useRef(null)
   const [hoverIdx, setHoverIdx] = useState(null)
 
+  // ------- RUN ANALYSIS -------
   async function handleRun(e) {
     e.preventDefault()
     setError(''); setLoading(true); setSeries([]); setSummary(null); setHoverIdx(null)
+
     try {
       const res = await fetch(`${API_BASE}/positions/by-range?start=${encodeURIComponent(start)}`)
       if (!res.ok) throw new Error(`API error ${res.status}`)
       const rows = await res.json()
 
+      // נקודת פתיחה תמידית
+      const startPoint = { t: parseTs(start), v: Number(capital) }
+
       if (!Array.isArray(rows) || rows.length === 0) {
+        setSeries([startPoint])
         setSummary({ points: 0, final: Number(capital), totalChangePct: 0 })
         return
       }
 
-      // ------- שינוי עיקרי 1: שימוש בשמות שדות חדשים/ישנים + פרסור עמיד -------
       const getEntryTs = (r) => r.entry_time ?? r.entry_date ?? r.trade_date ?? null
-      const getExitTs  = (r) => r.exit_time  ?? r.exit_date  ?? null
-
-      // מיין לפי זמן כניסה (עמיד לפורמטים שונים)
       rows.sort((a, b) => +parseTs(getEntryTs(a)) - +parseTs(getEntryTs(b)))
 
-      // חישוב שינוי לכל פוזיציה
       const getChange = (r) => {
         if (isFiniteNum(r.change_pct)) return Number(r.change_pct) / 100
         const e = r.entry_price, x = r.exit_price
@@ -57,19 +62,36 @@ export default function StatsPanel({ apiBase }) {
         return 0
       }
 
-      // Allocation mode (A): מסכנים risk% מההון בכל טרייד
-      let cur = Number(capital), risk = Math.max(0, Number(riskPct)) / 100
-      const pts = []
+      let cur = Number(capital)
+      const pts = [startPoint]
+
       for (const r of rows) {
-        const t = parseTs(getEntryTs(r)) // ← נקודת הזמן היא תאריך הכניסה, עם פרסור קשיח
+        const t = parseTs(getEntryTs(r))
         const change = getChange(r)
-        const pnl = (cur * risk) * change
+
+        // הקצאה לפי מצב:
+        // risk → אחוז מהתיק; fixed → סכום קבוע (לא לעבור את גודל התיק הנוכחי)
+        let alloc = 0
+        if (allocMode === 'risk') {
+          const risk = Math.max(0, Number(riskPct)) / 100
+          alloc = cur * risk
+        } else {
+          alloc = Math.max(0, Number(fixedAmount))
+          if (!isFinite(alloc)) alloc = 0
+          alloc = Math.min(alloc, cur) // שלא יחרוג מההון הנוכחי
+        }
+
+        const pnl = alloc * change
         cur += pnl
         pts.push({ t, v: cur })
       }
 
       setSeries(pts)
-      setSummary({ points: rows.length, final: cur, totalChangePct: ((cur - Number(capital))/Number(capital))*100 })
+      setSummary({
+        points: rows.length,
+        final: cur,
+        totalChangePct: safePct(((cur - Number(capital)) / Number(capital)) * 100)
+      })
     } catch (err) {
       setError(String(err.message || err))
     } finally { setLoading(false) }
@@ -81,7 +103,7 @@ export default function StatsPanel({ apiBase }) {
     if (!c || !wrap) return
     const ro = new ResizeObserver(() => {
       const dpr = window.devicePixelRatio || 1
-      const w = wrap.clientWidth, h = wrap.clientHeight
+      const w = wrap.clientWidth, h = Math.max(220, wrap.clientHeight)
       c.width = Math.max(1, Math.floor(w * dpr))
       c.height = Math.max(1, Math.floor(h * dpr))
       c.style.width = w + 'px'
@@ -106,11 +128,12 @@ export default function StatsPanel({ apiBase }) {
       if (!series.length) return
       const rect = c.getBoundingClientRect()
       const x = ev.clientX - rect.left // CSS px
-      const padL=60,padR=16,padT=18,padB=40
+      const {L, R, T, B} = PAD()
       const w = rect.width
       const tMin = +new Date(series[0].t)
       const tMax = +new Date(series[series.length-1].t)
-      const xOf = t => padL + (((t - tMin) / (tMax - tMin || 1)) * (w - padL - padR))
+      const span = (tMax - tMin) || 1
+      const xOf = t => L + (((t - tMin) / span) * (w - L - R))
       let bestI=0,bestD=Infinity
       for (let i=0;i<series.length;i++){
         const px = xOf(+new Date(series[i].t))
@@ -128,13 +151,18 @@ export default function StatsPanel({ apiBase }) {
     }
   }, [series])
 
+  // UI helpers for mutually-exclusive inputs
+  const inactiveStyle = (isInactive) => isInactive ? { opacity: 0.5 } : {}
+  const riskInactive  = allocMode !== 'risk'
+  const fixedInactive = allocMode !== 'fixed'
+
   return (
     <div style={{ height:'100%', display:'flex', flexDirection:'column', gap:12 }}>
       {/* Form row */}
       <form onSubmit={handleRun} className="glass" style={{ padding: 16 }}>
         <div style={{
           display:'grid',
-          gridTemplateColumns:'minmax(220px,1fr) minmax(160px,1fr) minmax(180px,1fr) auto',
+          gridTemplateColumns:'minmax(220px,1fr) minmax(160px,1fr) minmax(180px,1fr) minmax(200px,1fr) auto',
           gap:12, alignItems:'end'
         }}>
           <Field label="תאריך התחלה">
@@ -145,17 +173,61 @@ export default function StatsPanel({ apiBase }) {
               className="input"
             />
           </Field>
+
           <Field label="סכום תיק (₪)">
-            <input type="number" min="0" step="100" value={capital} onChange={e=>setCapital(e.target.value)} className="input" placeholder="10000"/>
+            <input
+              type="number"
+              min="0"
+              step="100"
+              value={capital}
+              onChange={e=>setCapital(e.target.value)}
+              className="input"
+              placeholder="10000"
+            />
           </Field>
+
+          {/* RISK % (exclusive with fixed amount) */}
           <Field label="אחוז סיכון מהתיק (%)">
-            <input type="number" min="0" max="100" step="0.1" value={riskPct} onChange={e=>setRiskPct(e.target.value)} className="input" placeholder="10"/>
+            <input
+              type="number"
+              min="0"
+              max="100"
+              step="0.1"
+              value={riskPct}
+              onChange={e => { setRiskPct(e.target.value); setAllocMode('risk') }}
+              onFocus={() => setAllocMode('risk')}
+              className="input"
+              placeholder="10"
+              style={inactiveStyle(riskInactive)}
+              title="כאשר שדה זה פעיל, החישוב לפי אחוז מהתיק בכל טרייד"
+            />
           </Field>
+
+          {/* FIXED AMOUNT (exclusive with risk %) */}
+          <Field label="סכום קבוע לעסקה (₪)">
+            <input
+              type="number"
+              min="0"
+              step="50"
+              value={fixedAmount}
+              onChange={e => { setFixedAmount(e.target.value); setAllocMode('fixed') }}
+              onFocus={() => setAllocMode('fixed')}
+              className="input"
+              placeholder="1000"
+              style={inactiveStyle(fixedInactive)}
+              title="כאשר שדה זה פעיל, ההקצאה לכל טרייד היא סכום קבוע"
+            />
+          </Field>
+
           <div style={{ display:'flex', justifyContent:'flex-end' }}>
-            <button type="submit" className="btn btn--primary" disabled={loading} style={{ height:42 }}>הרץ ניתוח</button>
+            <button type="submit" className="btn btn--primary" disabled={loading} style={{ height:42 }}>
+              הרץ ניתוח
+            </button>
           </div>
         </div>
-        <div style={{ marginTop: 8 }}>
+
+        <div style={{ marginTop: 8, display:'flex', gap:12, alignItems:'center', flexWrap:'wrap' }}>
+          <ModeBadge mode={allocMode} />
           {loading && <span className="auth-hint">טוען נתונים ומחשב…</span>}
           {error && <span className="auth-error" style={{ marginInlineStart: 8 }}>{error}</span>}
         </div>
@@ -188,6 +260,17 @@ function Field({ label, children }) {
   )
 }
 
+function ModeBadge({ mode }) {
+  const text = mode === 'risk'
+    ? 'מצב חישוב: אחוז מהתיק בכל עסקה'
+    : 'מצב חישוב: סכום קבוע לכל עסקה'
+  return (
+    <span className="auth-hint" style={{
+      border:'1px solid var(--stroke)', padding:'4px 8px', borderRadius:999
+    }}>{text}</span>
+  )
+}
+
 // ===== Helpers =====
 function defaultStartISO(){ const d=new Date(Date.now()-7*24*3600*1000); return d.toISOString().slice(0,19) }
 function localDateTimeForInput(s){ try{return s.slice(0,16)}catch{return''} }
@@ -195,32 +278,27 @@ function toISOFromLocalInput(s){ return s ? s + ':00' : '' }
 function fmtCurrency(v){ if(!isFinite(v))return'-'; return new Intl.NumberFormat('he-IL',{style:'currency',currency:'ILS',maximumFractionDigits:2}).format(Number(v)) }
 function fmtPct(v){ if(!isFinite(v))return'-'; const n=Number(v); return (n>0?'+':'')+n.toFixed(2)+'%' }
 function isFiniteNum(x){ return x !== null && x !== '' && Number.isFinite(Number(x)) }
+function safePct(v){ return Number.isFinite(v) ? v : 0 }
 
-/** פרסור עמיד לתאריכים שמגיעים מה-API:
- * מקבל:
- *  - מספר (שניות/מילי-שניות מאז epoch)
- *  - "YYYY-MM-DD HH:MM[:SS]"  ← מחליף רווח ב-"T" ומוסיף שניות אם חסר
- *  - "YYYY-MM-DDTHH:MM[:SS]"
- */
+/** פרסור עמיד לתאריכים שמגיעים מה-API */
 function parseTs(v){
   if (!v && v !== 0) return new Date(NaN)
   if (v instanceof Date) return v
-  // מספר? שניות או מילי־שניות
   if (typeof v === 'number' || (/^\d+$/.test(String(v)))) {
     const n = Number(v)
     return new Date(n < 1e12 ? n * 1000 : n)
   }
   let s = String(v).trim()
   if (!s) return new Date(NaN)
-  // להחליף רווח ל-T
   if (s.includes(' ') && !s.includes('T')) s = s.replace(' ', 'T')
-  // אם אין שניות – להוסיף
   const timePart = s.split('T')[1] || ''
   if (timePart && timePart.length <= 5) s = s + ':00'
   return new Date(s)
 }
 
 // ===== Chart (works in CSS units; DPR handled by context transform) =====
+const PAD = () => ({ L: 60, R: 16, T: 18, B: 40 })
+
 function drawChart(canvas, series, hoverIdx=null){
   const ctx = canvas.getContext('2d')
   const dpr = window.devicePixelRatio || 1
@@ -236,64 +314,64 @@ function drawChart(canvas, series, hoverIdx=null){
     return
   }
 
-  const padL=60,padR=16,padT=18,padB=40
+  const {L, R, T, B} = PAD()
   const tMin=+new Date(series[0].t), tMax=+new Date(series[series.length-1].t)
   let vMin=Math.min(...series.map(p=>p.v)), vMax=Math.max(...series.map(p=>p.v))
   if(vMin===vMax){vMin-=1;vMax+=1}
 
-  const x = t => padL + (((t - tMin) / (tMax - tMin || 1)) * (w - padL - padR))
-  const y = v => padT + ((1 - ((v - vMin) / (vMax - vMin || 1))) * (h - padT - padB))
+  const x = t => L + (((t - tMin) / (tMax - tMin || 1)) * (w - L - R))
+  const y = v => T + ((1 - ((v - vMin) / (vMax - vMin || 1))) * (h - T - B))
 
   // axes
   ctx.strokeStyle='rgba(255,255,255,0.25)'; ctx.lineWidth=1
-  ctx.beginPath(); ctx.moveTo(padL,h-padB); ctx.lineTo(w-padR,h-padB); ctx.stroke()
-  ctx.beginPath(); ctx.moveTo(padL,padT); ctx.lineTo(padL,h-padB); ctx.stroke()
+  ctx.beginPath(); ctx.moveTo(L,h-B); ctx.lineTo(w-R,h-B); ctx.stroke()
+  ctx.beginPath(); ctx.moveTo(L,T); ctx.lineTo(L,h-B); ctx.stroke()
 
   // Y ticks
   ctx.font='12px system-ui'
   for(let i=0;i<=4;i++){
     const vv=vMin+(i/4)*(vMax-vMin), yy=y(vv)
     ctx.strokeStyle='rgba(255,255,255,0.12)'
-    ctx.beginPath(); ctx.moveTo(padL,yy); ctx.lineTo(w-padR,yy); ctx.stroke()
+    ctx.beginPath(); ctx.moveTo(L,yy); ctx.lineTo(w-R,yy); ctx.stroke()
     ctx.fillStyle='rgba(255,255,255,0.75)'
     ctx.textAlign='right'; ctx.textBaseline='middle'
-    ctx.fillText(fmtCurrencyShort(vv), padL-8, yy)
+    ctx.fillText(fmtCurrencyShort(vv), L-8, yy)
   }
   // Y title
-  ctx.save(); ctx.translate(16,(h-padB+padT)/2); ctx.rotate(-Math.PI/2)
+  ctx.save(); ctx.translate(16,(h-B+T)/2); ctx.rotate(-Math.PI/2)
   ctx.fillStyle='rgba(255,255,255,0.8)'; ctx.textAlign='center'; ctx.textBaseline='bottom'
   ctx.fillText('סכום התיק (₪)',0,0); ctx.restore()
 
   // X ticks
-  const xTicks=Math.min(6,Math.max(2,Math.floor((w-padL-padR)/160)))
+  const xTicks=Math.min(6,Math.max(2,Math.floor((w-L-R)/160)))
   for(let i=0;i<=xTicks;i++){
     const tt=tMin+(i/xTicks)*(tMax-tMin), xx=x(tt)
     ctx.strokeStyle='rgba(255,255,255,0.12)'
-    ctx.beginPath(); ctx.moveTo(xx,padT); ctx.lineTo(xx,h-padB); ctx.stroke()
+    ctx.beginPath(); ctx.moveTo(xx,T); ctx.lineTo(xx,h-B); ctx.stroke()
     ctx.fillStyle='rgba(255,255,255,0.75)'
     ctx.textAlign='center'; ctx.textBaseline='top'
-    ctx.fillText(formatTimeTick(new Date(tt)), xx, h-padB+6)
+    ctx.fillText(formatTimeTick(new Date(tt)), xx, h-B+6)
   }
   // X title
   ctx.fillStyle='rgba(255,255,255,0.8)'; ctx.textAlign='center'; ctx.textBaseline='top'
-  ctx.fillText('זמן',(padL+(w-padR))/2,h-16)
+  ctx.fillText('זמן',(L+(w-R))/2,h-16)
 
-  // line + fill
+  // line + gradient fill
   ctx.strokeStyle='rgba(110,162,255,0.95)'; ctx.lineWidth=2
   ctx.beginPath()
   series.forEach((p,i)=>{ const px=x(+new Date(p.t)), py=y(p.v); i?ctx.lineTo(px,py):ctx.moveTo(px,py) })
   ctx.stroke()
   const lastX = x(+new Date(series[series.length-1].t))
   const firstX = x(+new Date(series[0].t))
-  ctx.lineTo(lastX, h-padB); ctx.lineTo(firstX, h-padB); ctx.closePath()
-  const grd=ctx.createLinearGradient(0,padT,0,h-padB); grd.addColorStop(0,'rgba(110,162,255,0.25)'); grd.addColorStop(1,'rgba(110,162,255,0)')
+  ctx.lineTo(lastX, h-B); ctx.lineTo(firstX, h-B); ctx.closePath()
+  const grd=ctx.createLinearGradient(0,T,0,h-B); grd.addColorStop(0,'rgba(110,162,255,0.25)'); grd.addColorStop(1,'rgba(110,162,255,0)')
   ctx.fillStyle=grd; ctx.fill()
 
   // hover
   if(hoverIdx!=null && series[hoverIdx]){
     const pt=series[hoverIdx], px=x(+new Date(pt.t)), py=y(pt.v)
     ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=1
-    ctx.beginPath(); ctx.moveTo(px,padT); ctx.lineTo(px,h-padB); ctx.stroke()
+    ctx.beginPath(); ctx.moveTo(px,T); ctx.lineTo(px,h-B); ctx.stroke()
     ctx.fillStyle='#6EA2FF'; ctx.beginPath(); ctx.arc(px,py,3.5,0,Math.PI*2); ctx.fill()
     ctx.strokeStyle='rgba(255,255,255,0.8)'; ctx.beginPath(); ctx.arc(px,py,5.5,0,Math.PI*2); ctx.stroke()
 
