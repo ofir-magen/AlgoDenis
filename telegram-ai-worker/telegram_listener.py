@@ -1,16 +1,15 @@
 import asyncio
 import os
 import re
-import sys
 import threading
 import time
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple, Dict, Any
+import json
 
-from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Bot, Update
 from telegram.ext import (
     ApplicationBuilder,
     MessageHandler,
-    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -22,6 +21,7 @@ logger = build_logger("tg-listener")
 
 RETRY_DELAY_SECONDS = float(os.getenv("TG_RETRY_DELAY", "15"))
 UsersGroupChat = int(os.getenv("UsersGroupChat", "0"))
+
 
 def _extract_urls(message_text: str, entities) -> List[str]:
     if not entities:
@@ -54,6 +54,7 @@ def _extract_urls(message_text: str, entities) -> List[str]:
     logger.info(f"_extract_urls found {len(uniq)} unique urls")
     return uniq
 
+
 def _build_httpx_request_from_env() -> HTTPXRequest:
     proxy = os.getenv("TG_PROXY") or None
     http_version_env = os.getenv("TG_HTTP_VERSION", "").strip()
@@ -67,13 +68,60 @@ def _build_httpx_request_from_env() -> HTTPXRequest:
         kwargs["proxy"] = proxy
     if http_version_env in ("1.1", "2", "2.0"):
         kwargs["http_version"] = http_version_env
-    logger.info(f"HTTPXRequest built (proxy={bool(proxy)}, http_version={http_version_env or 'default'})")
+    logger.info(
+        f"HTTPXRequest built (proxy={bool(proxy)}, http_version={http_version_env or 'default'})"
+    )
     return HTTPXRequest(**kwargs)
+
+
+# ===== Inline "JSON" extractor =====
+_PYDICT_BLOCK_RE = re.compile(r"\{[\s\S]*?\}", re.MULTILINE)
+
+
+def extract_inline_pyjson(full_text: str, remove_from_text: bool = False):
+    """
+    מאתר dict פייתון-סטייל מתוך ההודעה, מנרמל ל-JSON ומחזיר כ-dict.
+    :return: (text_after, obj_or_none, raw_block_or_none)
+    """
+    if not full_text:
+        return full_text, None, None
+
+    m = _PYDICT_BLOCK_RE.search(full_text)
+    if not m:
+        return full_text, None, None
+
+    raw = m.group(0).strip()
+
+    normalized = (
+        raw.replace("\\'", "\uFFFF")
+        .replace("'", '"')
+        .replace("\uFFFF", "\\'")
+        .replace(": None", ": null")
+        .replace(":  None", ": null")
+        .replace(" None,", " null,")
+        .replace(" True", " true")
+        .replace(" False", " false")
+    )
+
+    obj = None
+    try:
+        obj = json.loads(normalized)
+    except Exception:
+        obj = None
+
+    if remove_from_text:
+        new_text = (full_text[:m.start()] + full_text[m.end():]).strip()
+    else:
+        new_text = full_text
+
+    return new_text, obj, raw
+
 
 # ===== Matrix parsing =====
 _ARRAY_ROW_RE = re.compile(
     r"^\s*\[\s*-?\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?\s*(?:,\s*-?\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?\s*)+\]\s*$"
 )
+
 
 def _extract_trailing_bracket_matrix(lines: List[str]) -> Tuple[int, str]:
     i = len(lines) - 1
@@ -86,6 +134,7 @@ def _extract_trailing_bracket_matrix(lines: List[str]) -> Tuple[int, str]:
         return i + 1, "\n".join(collected).strip()
     return -1, ""
 
+
 def _extract_trailing_fenced_block(text: str) -> Tuple[int, int, str]:
     fence = "```"
     last_fence = text.rfind(fence)
@@ -94,18 +143,19 @@ def _extract_trailing_fenced_block(text: str) -> Tuple[int, int, str]:
     closing = text.rfind(fence)
     if closing == -1 or closing == last_fence:
         return -1, -1, ""
-    if text[closing + len(fence):].strip():
+    if text[closing + len(fence) :].strip():
         return -1, -1, ""
     opening = text.rfind(fence, 0, closing)
     if opening == -1:
         return -1, -1, ""
-    header = text[opening:opening + 10].lower()
+    header = text[opening : opening + 10].lower()
     if not header.startswith("```"):
         return -1, -1, ""
-    code = text[opening + len(fence):closing].strip()
+    code = text[opening + len(fence) : closing].strip()
     if not code:
         return -1, -1, ""
     return opening, closing + len(fence), code
+
 
 def _split_text_and_trailing_matrix(text: str, max_chars: int = 12000) -> Tuple[str, str]:
     raw = text.rstrip()
@@ -131,16 +181,25 @@ def _split_text_and_trailing_matrix(text: str, max_chars: int = 12000) -> Tuple[
 
     return raw, ""
 
-def _parse_fields_from_full_message(full_text: str) -> Optional[str]:
-    if not full_text:
-        return None
+
+# ===== Helper: extract AI fields (company/symbols) from GPT answer text =====
+def _extract_ai_fields_from_text(text: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    מחלץ:
+    - שם החברה: ...
+    - סימבול ת״א: ...
+    - סימבול ארה״ב: ... / סימבול ארהב:
+    מתוך קטע 'תשובה מ-AI:' שנמצא בתוך text.
+    """
+    if not text:
+        return None, None, None
 
     anchor = "תשובה מ-AI:"
-    idx = full_text.find(anchor)
+    idx = text.find(anchor)
     if idx == -1:
-        return None
-    after = full_text[idx + len(anchor):].strip()
+        return None, None, None
 
+    after = text[idx + len(anchor):].strip()
     company = None
     tase = None
     us = None
@@ -152,29 +211,35 @@ def _parse_fields_from_full_message(full_text: str) -> Optional[str]:
 
         if s.startswith("שם החברה:"):
             company = s.split(":", 1)[1].strip() or None
-        elif s.startswith("סימבול ת״א:") or s.startswith("סימבול תא:") or s.startswith("סימבול ת\"א:"):
+        elif (
+            s.startswith("סימבול ת״א:")
+            or s.startswith("סימבול תא:")
+            or s.startswith("סימבול ת\"א:")
+        ):
             tase = s.split(":", 1)[1].strip() or None
-        elif s.startswith("סימבול ארה״ב:") or s.startswith("סימבול ארהב:") or s.startswith("סימבול ארה\"ב:"):
+        elif (
+            s.startswith("סימבול ארה״ב:")
+            or s.startswith("סימבול ארהב:")
+            or s.startswith("סימבול ארה\"ב:")
+        ):
             us = s.split(":", 1)[1].strip() or None
 
         if company and tase and us:
             break
 
-    if not (company or tase or us):
-        return None
+    return company, tase, us
 
-    company = company or "לא זוהה"
-    tase = tase or "לא זוהה"
-    us = us or "לא זוהה"
 
-    return f"שם החברה: {company}\nסימבול ת״א: {tase}\nסימבול ארה״ב: {us}"
-
+# ===== Telegram Listener =====
 class TelegramListener:
     def __init__(
         self,
         bot_token: str,
         channel_id: int,
-        on_urls: Callable[[List[str], str, str, str], asyncio.Future],
+        # callback: (urls, question_text, link_text, matrix_text, inline_json)
+        on_urls: Callable[
+            [List[str], str, str, str, Optional[Dict[str, Any]]], asyncio.Future
+        ],
     ):
         self._bot_token = bot_token
         self._channel_id = channel_id
@@ -203,103 +268,84 @@ class TelegramListener:
                 ts = post.date.strftime("%Y-%m-%d %H:%M:%S")
                 urls = _extract_urls(text, entities)
 
-                logger.info(f"Channel post at {ts} | text_len={len(text)} | urls={len(urls)}")
+                logger.info(
+                    f"Channel post at {ts} | text_len={len(text)} | urls={len(urls)}"
+                )
 
                 question_text = text
                 link_text = ""
+                rest_urls: List[str] = []
 
                 if urls:
                     link_text = urls[0]
                     rest_urls = urls[1:]
 
-                    # remove URLs & text_link shown text from the question
+                    # הסרת ה-URLs מהטקסט
                     for u in [link_text] + rest_urls:
                         question_text = question_text.replace(u, "")
+
+                    # הסרת טקסט מוצג של text_link
                     text_link_texts = []
                     for ent in entities or []:
                         if getattr(ent, "type", None) == "text_link":
                             try:
-                                shown = text[ent.offset: ent.offset + ent.length]
+                                shown = text[ent.offset : ent.offset + ent.length]
                                 text_link_texts.append(shown.strip())
                             except Exception as e:
-                                logger.exception(f"extract shown text_link failed: {e}")
+                                logger.exception(
+                                    f"extract shown text_link failed: {e}"
+                                )
                     for shown in text_link_texts:
                         question_text = question_text.replace(shown, "")
 
-                    # extract matrix
-                    question_text, matrix_text = _split_text_and_trailing_matrix(question_text.strip())
+                # חילוץ inline JSON
+                question_text, inline_json, inline_json_raw = extract_inline_pyjson(
+                    question_text,
+                    remove_from_text=True,
+                )
+                if inline_json is not None:
+                    logger.info(f"Inline JSON extracted: {inline_json}")
 
-                    logger.info("Post parsed: question_text_len=%d, link_text='%s', rest_urls=%d, matrix=%s",
-                                len(question_text), link_text, len(rest_urls), "yes" if matrix_text else "no")
+                # חילוץ מטריצה מהסוף
+                question_text, matrix_text = _split_text_and_trailing_matrix(
+                    question_text.strip()
+                )
 
+                logger.info(
+                    "Post parsed: question_text_len=%d, link_text='%s', rest_urls=%d, matrix=%s",
+                    len(question_text),
+                    link_text,
+                    len(rest_urls),
+                    "yes" if matrix_text else "no",
+                )
+
+                # קריאה ל-callback רק אם יש URLs (כמו במקור)
+                if urls:
                     if self._loop and not self._loop.is_closed():
                         asyncio.run_coroutine_threadsafe(
-                            self._on_urls(rest_urls, question_text, link_text, matrix_text),
-                            self._loop
+                            self._on_urls(
+                                rest_urls,
+                                question_text,
+                                link_text,
+                                matrix_text,
+                                inline_json,
+                            ),
+                            self._loop,
                         )
                 else:
-                    q_wo_urls, matrix_text = _split_text_and_trailing_matrix(question_text.strip())
-                    logger.info("No URLs found in post. matrix=%s", "yes" if matrix_text else "no")
+                    # רק לוג אם אין לינקים
+                    _, matrix_only = _split_text_and_trailing_matrix(
+                        question_text.strip()
+                    )
+                    logger.info(
+                        "No URLs found in post. matrix=%s",
+                        "yes" if matrix_only else "no",
+                    )
+
             except Exception as e:
                 logger.exception(f"on_channel_post failed: {e}")
 
-        async def on_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            try:
-                query = update.callback_query
-                if not query:
-                    return
-
-                await query.answer()
-
-                action_map = {
-                    "vote_up": "עליה",
-                    "vote_down": "ירידה",
-                    "vote_cancel": "ביטול",
-                }
-                action_key = (query.data or "").strip()
-                action_label = action_map.get(action_key, "")
-
-                if not action_label:
-                    logger.warning(f"Unknown action_key received: '{action_key}'")
-                    return
-
-                if action_key == "vote_cancel":
-                    try:
-                        await query.edit_message_reply_markup(reply_markup=None)
-                        logger.info("vote_cancel: buttons removed.")
-                    except Exception:
-                        logger.exception("vote_cancel: failed to remove buttons")
-                    return
-
-                origin_text = ""
-                if query.message:
-                    origin_text = (query.message.text or query.message.caption or "").strip()
-
-                fields_text = _parse_fields_from_full_message(origin_text) or ""
-
-                to_send = action_label
-                if fields_text:
-                    to_send = f"{action_label}\n{fields_text}"
-
-                if UsersGroupChat != 0:
-                    try:
-                        await context.bot.send_message(
-                            chat_id=UsersGroupChat,
-                            text=to_send
-                        )
-                        logger.info("Forwarded decision to UsersGroupChat.")
-                    except Exception as e:
-                        logger.exception(f"Failed forwarding to UsersGroupChat: {e}")
-
-                try:
-                    await query.edit_message_reply_markup(reply_markup=None)
-                except Exception:
-                    logger.exception("Failed removing buttons after action.")
-            except Exception as e:
-                logger.exception(f"on_button_click failed: {e}")
-
         app.add_handler(MessageHandler(filters.ChatType.CHANNEL, on_channel_post))
-        app.add_handler(CallbackQueryHandler(on_button_click))
         self._app = app
 
     def start(self, backend_loop: asyncio.AbstractEventLoop):
@@ -313,7 +359,7 @@ class TelegramListener:
                         self._build_app()
                     logger.info("Telegram polling starting…")
                     self._app.run_polling(
-                        allowed_updates=["channel_post", "callback_query"],
+                        allowed_updates=["channel_post"],
                         drop_pending_updates=True,
                         stop_signals=None,
                         bootstrap_retries=10,
@@ -330,26 +376,101 @@ class TelegramListener:
         th.start()
         logger.info("Telegram polling thread started.")
 
+
+# ===== Messenger =====
 class TelegramMessenger:
     def __init__(self, bot_token: str, target_group_id: int):
         self._bot = Bot(token=bot_token, request=_build_httpx_request_from_env())
         self._target_group_id = target_group_id
         logger.info(f"TelegramMessenger initialized for chat_id={target_group_id}")
 
-    async def send_text_with_button(self, text: str):
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("עליה", callback_data="vote_up"),
-                InlineKeyboardButton("ירידה", callback_data="vote_down"),
-                InlineKeyboardButton("ביטול", callback_data="vote_cancel"),
-            ]
-        ])
+    async def send_text_with_button(
+        self,
+        text: str,
+        orderRate: Any = None,
+        flag: Any = None,
+        inline_json: Optional[Dict[str, Any]] = None,
+        ai_json: Optional[Dict[str, Any]] = None,
+    ):
+        """
+        1. תמיד שולח את ההודעה המלאה ל-TARGET_GROUP_ID (ללא כפתורים).
+        2. אם flag == True ויש UsersGroupChat:
+           שולח ל-UsersGroupChat הודעה מסוכמת:
+           - שם החברה
+           - סימבול ת״א
+           - סימבול ארה״ב
+           - פרטי orderRate (ENTRY/SL/TP) בצורה יפה
+        """
+
+        # 1) שליחה ראשית לקבוצת היעד
         try:
             await self._bot.send_message(
                 chat_id=self._target_group_id,
                 text=text,
-                reply_markup=keyboard,
             )
-            logger.info("Message with buttons sent to target group.")
+            logger.info("Message sent to target group (no buttons).")
         except Exception as e:
-            logger.exception(f"send_text_with_button failed: {e}")
+            logger.exception(
+                f"send_text_with_button to target_group failed: {e}"
+            )
+
+        # 2) שליחה מסוכמת ל-UsersGroupChat לפי flag
+        try:
+            is_true_flag = bool(flag)
+            logger.info("flag evaluated as: %s", is_true_flag)
+
+            if is_true_flag and UsersGroupChat:
+                company, tase, us = _extract_ai_fields_from_text(text)
+
+                extra_lines: List[str] = []
+
+                if company:
+                    extra_lines.append(f"שם החברה: {company}")
+                if tase:
+                    extra_lines.append(f"סימבול ת״א: {tase}")
+                if us:
+                    extra_lines.append(f"סימבול ארה״ב: {us}")
+
+                # הצגה יפה של orderRate אם קיים
+                if isinstance(orderRate, dict):
+                    entry = orderRate.get("ENTRY_PRICE")
+                    sl = orderRate.get("STOP_LOSS")
+                    tp = orderRate.get("TAKE_PROFIT")
+
+                    if entry is not None or sl is not None or tp is not None:
+                        extra_lines.append("")
+                        extra_lines.append("פרטי עסקה):")
+                        if entry is not None:
+                            extra_lines.append(f"מחיר כניסה: {entry}")
+                        if sl is not None:
+                            extra_lines.append(f"סטופ לוס: {sl}")
+                        if tp is not None:
+                            extra_lines.append(f"טייק פרופיט: {tp}")
+
+                # אם אין כלום, לא נשלח סתם הודעה ריקה
+                if not extra_lines:
+                    logger.info(
+                        "flag=True אך לא נמצאו נתונים להרכבת הודעת UsersGroupChat."
+                    )
+                    return
+
+                extra_text = "\n".join(extra_lines)
+
+                await self._bot.send_message(
+                    chat_id=UsersGroupChat,
+                    text=extra_text,
+                )
+                logger.info(
+                    "Extra message sent to UsersGroupChat due to flag=True."
+                )
+            else:
+                logger.info(
+                    "No extra message sent to UsersGroupChat (flag=%s, UsersGroupChat=%s)",
+                    flag,
+                    UsersGroupChat,
+                )
+
+        except Exception as e:
+            logger.exception(
+                f"send_text_with_button extra-message logic failed: {e}"
+            )

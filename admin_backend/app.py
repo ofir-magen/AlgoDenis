@@ -260,19 +260,61 @@ def login(body: LoginIn):
 # -------- Settings --------
 @app.get("/api/settings")
 def get_settings(_: str = Depends(require_auth)):
-    data = getJsonData()
-    return {"x": int(data.get("x", 0)), "y": int(data.get("y", 0))}
+    """
+    מחזיר את המינימום/מקסימום החדשים:
+    min1, max1, min2, max2
+    אם הקובץ לא קיים עדיין – מחזיר 0 לכל הערכים.
+    """
+    try:
+        data = getJsonData()
+    except FileNotFoundError:
+        data = {}
+
+    return {
+        "min1": float(data.get("min1", 0)),
+        "max1": float(data.get("max1", 0)),
+        "min2": float(data.get("min2", 0)),
+        "max2": float(data.get("max2", 0)),
+    }
 
 @app.patch("/api/settings")
 async def patch_settings(request: Request, _: str = Depends(require_auth)):
+    """
+    מעדכן אחד או יותר מתוך:
+    min1, max1, min2, max2
+    שומר ב-JSON באותו קובץ קיים.
+    """
     payload = await request.json()
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Body must be JSON object")
-    cur = getJsonData()
-    if "x" in payload: cur["x"] = int(payload["x"])
-    if "y" in payload: cur["y"] = int(payload["y"])
+
+    try:
+        cur = getJsonData()
+    except FileNotFoundError:
+        cur = {}
+
+    keys = ("min1", "max1", "min2", "max2")
+    updated = False
+
+    for k in keys:
+        if k in payload:
+            try:
+                cur[k] = float(payload[k])
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail=f"{k} must be a number")
+            updated = True
+
+    if not updated:
+        raise HTTPException(status_code=400, detail="No valid settings provided")
+
     setJsonData(cur)
-    return {"x": int(cur["x"]), "y": int(cur["y"])}
+
+    return {
+        "min1": float(cur.get("min1", 0)),
+        "max1": float(cur.get("max1", 0)),
+        "min2": float(cur.get("min2", 0)),
+        "max2": float(cur.get("max2", 0)),
+    }
 
 # -------- Users --------
 @app.get("/api/users")
