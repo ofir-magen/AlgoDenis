@@ -4,3 +4,4 @@ dist/
 frontend/dist/
 backend/pdf_store/
 .env
+telegram-ai-worker/logs/app.log

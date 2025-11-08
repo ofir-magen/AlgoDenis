@@ -22,6 +22,8 @@ export default function SettingsPage() {
     max1: "",
     min2: "",
     max2: "",
+    loss: "",
+    profit: "",
   });
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
@@ -44,6 +46,8 @@ export default function SettingsPage() {
         max1: data.max1 ?? "",
         min2: data.min2 ?? "",
         max2: data.max2 ?? "",
+        loss: data.loss ?? "",
+        profit: data.profit ?? "",
       });
     } catch (e) {
       setMsg(String(e.message || e));
@@ -60,12 +64,20 @@ export default function SettingsPage() {
       max1: Number(settings.max1),
       min2: Number(settings.min2),
       max2: Number(settings.max2),
+      loss: Number(settings.loss),
+      profit: Number(settings.profit),
     };
 
+    // ולידציה: הכל מספרים
     if (
-      [payload.min1, payload.max1, payload.min2, payload.max2].some((v) =>
-        Number.isNaN(v)
-      )
+      [
+        payload.min1,
+        payload.max1,
+        payload.min2,
+        payload.max2,
+        payload.loss,
+        payload.profit,
+      ].some((v) => Number.isNaN(v))
     ) {
       setMsg("כל השדות חייבים להיות מספרים");
       return;
@@ -124,9 +136,7 @@ export default function SettingsPage() {
           />
         </label>
 
-        <span style={{ whiteSpace: "nowrap" }}>
-          {"<= (up - down) <="}
-        </span>
+        <span style={{ whiteSpace: "nowrap" }}>{"<= (up - down) <="}</span>
 
         <label style={{ display: "flex", flexDirection: "column" }}>
           <span>max1</span>
@@ -162,9 +172,7 @@ export default function SettingsPage() {
           />
         </label>
 
-        <span style={{ whiteSpace: "nowrap" }}>
-          {"<= (up - stable) <="}
-        </span>
+        <span style={{ whiteSpace: "nowrap" }}>{"<= (up - stable) <="}</span>
 
         <label style={{ display: "flex", flexDirection: "column" }}>
           <span>max2</span>
@@ -174,6 +182,50 @@ export default function SettingsPage() {
             value={settings.max2}
             onChange={(e) =>
               setSettings((s) => ({ ...s, max2: e.target.value }))
+            }
+          />
+        </label>
+      </div>
+
+      {/* שורה 3: loss */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          marginBottom: 12,
+        }}
+      >
+        <label style={{ display: "flex", flexDirection: "column" }}>
+          <span>loss (%)</span>
+          <input
+            type="number"
+            className="input"
+            value={settings.loss}
+            onChange={(e) =>
+              setSettings((s) => ({ ...s, loss: e.target.value }))
+            }
+          />
+        </label>
+      </div>
+
+      {/* שורה 4: profit */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          marginBottom: 12,
+        }}
+      >
+        <label style={{ display: "flex", flexDirection: "column" }}>
+          <span>profit (%)</span>
+          <input
+            type="number"
+            className="input"
+            value={settings.profit}
+            onChange={(e) =>
+              setSettings((s) => ({ ...s, profit: e.target.value }))
             }
           />
         </label>

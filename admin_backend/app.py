@@ -238,7 +238,7 @@ class DataLogCreateIn(BaseModel):
     signal_type: Optional[str] = None
     entry_time: Optional[str] = None
     entry_price: Optional[float] = None
-    exit_time: Optional[str] = None
+    exit_time: Optional[float] = None
     exit_price: Optional[float] = None
     change_pct: Optional[float] = None
 
@@ -261,8 +261,8 @@ def login(body: LoginIn):
 @app.get("/api/settings")
 def get_settings(_: str = Depends(require_auth)):
     """
-    מחזיר את המינימום/מקסימום החדשים:
-    min1, max1, min2, max2
+    מחזיר:
+    min1, max1, min2, max2, loss, profit
     אם הקובץ לא קיים עדיין – מחזיר 0 לכל הערכים.
     """
     try:
@@ -275,14 +275,16 @@ def get_settings(_: str = Depends(require_auth)):
         "max1": float(data.get("max1", 0)),
         "min2": float(data.get("min2", 0)),
         "max2": float(data.get("max2", 0)),
+        "loss": float(data.get("loss", 0)),
+        "profit": float(data.get("profit", 0)),
     }
 
 @app.patch("/api/settings")
 async def patch_settings(request: Request, _: str = Depends(require_auth)):
     """
     מעדכן אחד או יותר מתוך:
-    min1, max1, min2, max2
-    שומר ב-JSON באותו קובץ קיים.
+    min1, max1, min2, max2, loss, profit
+    שומר ב-JSON.
     """
     payload = await request.json()
     if not isinstance(payload, dict):
@@ -293,10 +295,10 @@ async def patch_settings(request: Request, _: str = Depends(require_auth)):
     except FileNotFoundError:
         cur = {}
 
-    keys = ("min1", "max1", "min2", "max2")
+    numeric_keys = ("min1", "max1", "min2", "max2", "loss", "profit")
     updated = False
 
-    for k in keys:
+    for k in numeric_keys:
         if k in payload:
             try:
                 cur[k] = float(payload[k])
@@ -314,6 +316,8 @@ async def patch_settings(request: Request, _: str = Depends(require_auth)):
         "max1": float(cur.get("max1", 0)),
         "min2": float(cur.get("min2", 0)),
         "max2": float(cur.get("max2", 0)),
+        "loss": float(cur.get("loss", 0)),
+        "profit": float(cur.get("profit", 0)),
     }
 
 # -------- Users --------

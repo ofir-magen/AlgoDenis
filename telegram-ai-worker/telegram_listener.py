@@ -402,7 +402,7 @@ class TelegramMessenger:
            - פרטי orderRate (ENTRY/SL/TP) בצורה יפה
         """
 
-        # 1) שליחה ראשית לקבוצת היעד
+        # 1) שליחה  ראשית לקבוצת היעד 
         try:
             await self._bot.send_message(
                 chat_id=self._target_group_id,

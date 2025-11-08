@@ -128,10 +128,16 @@ def orderList(last_rate_raw):
     if last_rate is None:
         return None
     r = lambda v: float(f"{v:.4f}")
+    with open("db/settings.json", "r", encoding="utf-8") as f:
+        data = json.load(f)
+        loss = data.get("loss")
+        profit = data.get("profit")
+
+
     return {
         "ENTRY_PRICE": r(last_rate),
-        "STOP_LOSS": r(last_rate * 0.9),
-        "TAKE_PROFIT": r(last_rate * 2),
+        "STOP_LOSS": r(last_rate * loss),
+        "TAKE_PROFIT": r(last_rate * profit),
     }
 
 
